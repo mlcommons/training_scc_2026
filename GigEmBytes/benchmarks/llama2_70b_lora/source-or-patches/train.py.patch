@@ -1,0 +1,21 @@
+--- a/train.py
++++ b/train.py
+@@ -22,7 +22,8 @@
+ import utils
+ from callback_debug import StatsLogCallback
+ from callback_logging import DeltaTimingCallback, MLPerfLoggingCallback, mllogger
+-from callback_nvfp4 import NVFP4Callback
++# SCC26: lazy NVFP4Callback import. It needs TE NVFP4 symbols that are absent
++# from the fallback container, even when FP4 is disabled.
+ from callback_warmup import NsysProfileCallback, WarmupCallback
+ from megatron.bridge.data.datasets.packed_sequence import PackedSequenceSpecs
+ from megatron.bridge.models.gpt_provider import GPTModelProvider
+@@ -357,6 +358,8 @@
+     )
+     callbacks = []
+     if cfg.model.fp4:
++        from callback_nvfp4 import NVFP4Callback  # lazy: see import note above
++
+         callbacks.append(NVFP4Callback(cfg))
+     if cfg.model.custom.warmup:
+         callbacks.append(WarmupCallback(cfg, forward_step_func=utils.forward_step))
