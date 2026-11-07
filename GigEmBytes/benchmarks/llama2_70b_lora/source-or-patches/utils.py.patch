@@ -1,0 +1,15 @@
+--- a/utils.py
++++ b/utils.py
+@@ -20,6 +20,12 @@
+ from megatron.core import parallel_state
+ from omegaconf.omegaconf import OmegaConf
+ 
++# torchrun exports RANK/LOCAL_RANK; Slurm exports SLURM_PROCID/SLURM_LOCALID.
++# Normalize them so the rank-0 logging, device selection and OOM profiling
++# later in this file work under either launcher.
++os.environ.setdefault("SLURM_PROCID", os.environ.get("RANK", "0"))
++os.environ.setdefault("SLURM_LOCALID", os.environ.get("LOCAL_RANK", "0"))
++
+ 
+ logging.getLogger("root").disabled = True
+ logging.getLogger("megatron.core.utils").disabled = True
