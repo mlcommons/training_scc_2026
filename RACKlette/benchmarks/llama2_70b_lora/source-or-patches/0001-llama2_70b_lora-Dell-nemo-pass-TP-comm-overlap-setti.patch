@@ -1,0 +1,52 @@
+From 153849d191e3c7d18f7523bd991d64899f90e1c1 Mon Sep 17 00:00:00 2001
+From: Shivram Sambhus <shivram.sambhus@gmail.com>
+Date: Wed, 28 Oct 2026 10:47:32 +0100
+Subject: [PATCH 1/2] llama2_70b_lora (Dell, nemo): pass TP comm overlap
+ settings to the model
+
+The Hydra config already maps TP_COMM_OVERLAP to model.ub_tp_comm_overlap
+and loads conf/tp_overlap/<GPU_ARCH>100tp<TP>mbs<MBS>.yaml into
+model.ub_tp_comm_overlap_cfg, but train.py never handed either value to
+GPTModelProvider. Setting TP_COMM_OVERLAP=True therefore had no effect.
+
+Pass both values through. The overlap config is only forwarded when
+TP_COMM_OVERLAP is true, so the default run is unchanged.
+---
+ train.py | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/train.py b/train.py
+index 3af340a..50a5309 100755
+--- a/train.py
++++ b/train.py
+@@ -45,6 +45,7 @@ from megatron.bridge.training.config import (
+ from megatron.bridge.training.finetune import finetune
+ from megatron.bridge.training.mixed_precision import MixedPrecisionConfig
+ from megatron.bridge.training.tokenizers.config import TokenizerConfig
++from omegaconf import OmegaConf
+ 
+ 
+ @hydra.main(version_base=None, config_path="conf", config_name="megatron_gpt_peft_tuning_config")
+@@ -56,6 +57,10 @@ def main(cfg):
+ 
+     cfg = utils.resolve(cfg)
+ 
++    ub_tp_comm_overlap_cfg = None
++    if cfg.model.ub_tp_comm_overlap and cfg.model.get("ub_tp_comm_overlap_cfg") is not None:
++        ub_tp_comm_overlap_cfg = OmegaConf.to_container(cfg.model.ub_tp_comm_overlap_cfg)
++
+     model_cfg = GPTModelProvider(
+         # Llama 2 70B architecture
+         hidden_size=8192,
+@@ -85,6 +90,8 @@ def main(cfg):
+         seq_length=cfg.model.encoder_seq_length,
+         # Communication configuration
+         cp_comm_type=cfg.model.cp_comm_type,
++        tp_comm_overlap=cfg.model.ub_tp_comm_overlap,
++        tp_comm_overlap_cfg=ub_tp_comm_overlap_cfg,
+         calculate_per_token_loss=False,
+         # Precision
+         fp8_dot_product_attention=cfg.model.fp8_dot_product_attention,
+-- 
+2.55.0
+
