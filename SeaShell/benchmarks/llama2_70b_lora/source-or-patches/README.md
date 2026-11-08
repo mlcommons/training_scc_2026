@@ -4,7 +4,7 @@
 This benchmark represents a LLama2-70B LoRA finetuning on the [GovReport](https://gov-report-data.github.io/) dataset.
 
 ## Changes made from reference AMD submission 
-This implemenentation is based around AMDs official 6.0 submission here: https://github.com/mlcommons/training_results_v6.0/tree/main/AMD/benchmarks/llama2_70b_lora/implementations/MI350X_EPYC_9575F_primus with several patches added
+This implementation is based around AMDs official 6.0 submission here: https://github.com/mlcommons/training_results_v6.0/tree/main/AMD/benchmarks/llama2_70b_lora/implementations/MI350X_EPYC_9575F_primus with several patches added
 
 - Ported to Apptainer - The documentation below and the run scripts for reproduciability all assume the system is running Apptainer (formerly Singularity)  1.5.4 or newer. This provides lower overhead compared to docker and a more appropriate containarization medium for HPC. The base container is converted from AMDs docker container.
 - scc26-te_mi300x_no_fp8_weight_transpose_cache.patch -  Rebuild FP8 matrix transpose on the fly instead of fronting it, saves memory
