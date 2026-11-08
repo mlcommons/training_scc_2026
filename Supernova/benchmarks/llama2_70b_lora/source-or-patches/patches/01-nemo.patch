@@ -1,0 +1,863 @@
+diff --git a/dataloader_cycle.py b/dataloader_cycle.py
+new file mode 100644
+index 0000000..1559808
+--- /dev/null
++++ b/dataloader_cycle.py
+@@ -0,0 +1,12 @@
++def cyclic_iter_early_reset(iterable):
++    while True:
++        iterator = iter(iterable)
++        while True:
++            try:
++                item = next(iterator)
++            except StopIteration:
++                break
++            if (getattr(iterator, "_tasks_outstanding", None) == 0
++                    and getattr(iterator, "_rcvd_idx", None) == getattr(iterator, "_send_idx", -1)):
++                iterator = iter(iterable)
++            yield item
+diff --git a/fp8_checkpoint.py b/fp8_checkpoint.py
+new file mode 100644
+index 0000000..3796d7f
+--- /dev/null
++++ b/fp8_checkpoint.py
+@@ -0,0 +1,201 @@
++import logging
++import os
++import re
++
++import torch
++from transformer_engine.pytorch.tensor.float8_tensor import Float8Tensor, Float8Quantizer
++from transformer_engine_torch import DType
++
++logger = logging.getLogger(__name__)
++
++
++def install_cpu_checkpoint_staging():
++    import megatron.core.dist_checkpointing.serialization as serialization
++    from megatron.core.dist_checkpointing.dict_utils import nested_values
++    from megatron.core.fp8_utils import dequantize_fp8_tensor, is_float8tensor
++
++    def stage(sharded_state_dict):
++        with torch.no_grad():
++            for value in nested_values(sharded_state_dict):
++                if hasattr(value, "data") and is_float8tensor(value.data):
++                    value.data = dequantize_fp8_tensor(value.data)
++                    if not _STREAMING:
++                        value.data = value.data.cpu()
++
++    serialization.force_all_tensors_to_non_fp8 = stage
++    _install_streaming_load()
++
++
++def _calibrate(param, source):
++    quantizer = param._get_quantizer()
++    if not isinstance(quantizer, Float8Quantizer):
++        return
++    amax = source.detach().abs().amax().float()
++    fp8_max = 448.0 if quantizer.dtype == DType.kFloat8E4M3 else 57344.0
++    scale = torch.where(amax > 0, fp8_max / amax, torch.ones_like(amax))
++    quantizer.scale.copy_(scale.reshape_as(quantizer.scale))
++    quantizer.amax.copy_(amax.reshape_as(quantizer.amax))
++    param.update_usage(rowwise_usage=True, columnwise_usage=False)
++    quantizer.set_usage(rowwise=True, columnwise=False)
++
++
++def _build_transpose(param):
++    param._transpose = param._data.movedim(-1, 0).contiguous()
++    param._transpose_invalid = False
++    param._get_quantizer().set_usage(rowwise=True, columnwise=True)
++
++
++def _calibrate_loaded_weights(module, state_dict, prefix, local_metadata, strict,
++                              missing_keys, unexpected_keys, error_msgs):
++    del local_metadata, strict, missing_keys, unexpected_keys, error_msgs
++    with torch.no_grad():
++        for name, param in module.named_parameters(recurse=False):
++            if not isinstance(param, Float8Tensor):
++                continue
++            source = state_dict.get(prefix + name)
++            if source is None:
++                continue
++            if source is _LOADED:
++                del state_dict[prefix + name]
++                continue
++            if isinstance(source, Float8Tensor):
++                raise RuntimeError(
++                    "FP8 checkpoint data was quantized before shard assembly; "
++                    "keep Megatron's force_all_tensors_to_non_fp8 load staging enabled")
++            _calibrate(param, source)
++
++
++def _finish_loaded_weights(module, incompatible_keys):
++    if _LOADED_KEYS:
++        incompatible_keys.missing_keys[:] = [
++            k for k in incompatible_keys.missing_keys if k not in _LOADED_KEYS
++        ]
++    for param in module.parameters(recurse=False):
++        if isinstance(param, Float8Tensor) and id(param) not in _LOADED_PARAMS:
++            _build_transpose(param)
++
++
++def prepare_fp8_checkpoint_load(model):
++    count = 0
++    for module in model.modules():
++        params = [p for p in module.parameters(recurse=False)
++                  if isinstance(p, Float8Tensor)]
++        if not params:
++            continue
++        for param in params:
++            param.update_usage(rowwise_usage=True, columnwise_usage=False)
++            param._get_quantizer().set_usage(rowwise=True, columnwise=False)
++        module.register_load_state_dict_pre_hook(_calibrate_loaded_weights)
++        module.register_load_state_dict_post_hook(_finish_loaded_weights)
++        count += len(params)
++    for mname, module in model.named_modules():
++        for pname, param in module.named_parameters(recurse=False):
++            if isinstance(param, Float8Tensor):
++                _FP8_PARAMS[f"{mname}.{pname}" if mname else pname] = param
++    logger.info("FP8 checkpoint load: high-precision staging and calibrated scales for %d weights", count)
++
++
++_FP8_PARAMS = {}
++_LOADED = object()
++_LOADED_KEYS = set()
++_LOADED_PARAMS = set()
++_STREAMING = False
++_LAYER_RE = re.compile(r"(?:^|\.)layers\.(\d+)\.")
++
++
++def _install_streaming_load():
++    import megatron.core.dist_checkpointing as dist_checkpointing
++
++    whole_load = dist_checkpointing.load
++
++    def load(*args, **kwargs):
++        threads = int(os.environ.get("LOAD_THREADS", "1"))
++        if threads == 1:
++            return _load(*args, **kwargs)
++        prev = torch.get_num_threads()
++        torch.set_num_threads(threads)
++        try:
++            return _load(*args, **kwargs)
++        finally:
++            torch.set_num_threads(prev)
++
++    def _load(sharded_state_dict, checkpoint_dir, *args, **kwargs):
++        global _STREAMING
++        model_sd = sharded_state_dict.get("model") if isinstance(sharded_state_dict, dict) else None
++        if (os.environ.get("LOAD_STREAM", "1") != "1" or not _FP8_PARAMS
++                or not isinstance(model_sd, dict)
++                or any(isinstance(v, dict) for v in model_sd.values())):
++            return whole_load(sharded_state_dict, checkpoint_dir, *args, **kwargs)
++        per = int(os.environ.get("LOAD_GROUP_LAYERS", "20"))
++        groups = {}
++        for key in model_sd:
++            m = _LAYER_RE.search(key)
++            groups.setdefault(-1 if m is None else int(m.group(1)) // per, []).append(key)
++        result, tails = {"model": {}}, None
++        kwargs["validate_access_integrity"] = False
++        kwargs["strict"] = "assume_ok_unexpected"
++        _STREAMING = True
++        try:
++            for i, gid in enumerate(sorted(groups)):
++                sub = {"model": {k: model_sd[k] for k in groups[gid]}}
++                if i == 0:
++                    sub.update({k: v for k, v in sharded_state_dict.items() if k != "model"})
++                out = whole_load(sub, checkpoint_dir, *args, **kwargs)
++                if isinstance(out, tuple):
++                    out, rest = out[0], out[1:]
++                    tails = rest if tails is None else tuple(a | b for a, b in zip(tails, rest))
++                applied = 0
++                with torch.no_grad():
++                    for key, value in out["model"].items():
++                        param = _FP8_PARAMS.get(key)
++                        if param is None or not torch.is_tensor(value):
++                            continue
++                        _calibrate(param, value)
++                        param.copy_(value)
++                        _build_transpose(param)
++                        out["model"][key] = _LOADED
++                        _LOADED_KEYS.add(key)
++                        _LOADED_PARAMS.add(id(param))
++                        applied += 1
++                        staged = model_sd[key]
++                        if hasattr(staged, "data") and torch.is_tensor(staged.data):
++                            staged.data = staged.data.new_empty(0)
++                if gid >= 0 and applied == 0:
++                    raise RuntimeError(
++                        "FP8 streaming load: no FP8 weight of layer group "
++                        f"{gid} matched a model parameter (state-dict key mismatch)")
++                result["model"].update(out.pop("model"))
++                result.update(out)
++                del out, sub
++        finally:
++            _STREAMING = False
++        torch.cuda.empty_cache()
++        logger.info("FP8 checkpoint load: streamed %d layer groups", len(groups))
++        return result if tails is None else (result, *tails)
++
++    dist_checkpointing.load = load
++
++
++def install_tensor_properties_compat():
++    from pathlib import Path
++
++    from megatron.core.dist_checkpointing.strategies.torch import (
++        TorchDistLoadShardedStrategy, _get_filesystem_reader)
++    from torch.distributed.checkpoint.metadata import TensorStorageMetadata
++
++    if getattr(TorchDistLoadShardedStrategy.load_tensors_metadata, "_tensor_properties_compat", False):
++        return
++    _orig = TorchDistLoadShardedStrategy.load_tensors_metadata
++
++    def _compat(self, checkpoint_dir: Path, metadata=None):
++        if metadata is None:
++            metadata = _get_filesystem_reader(checkpoint_dir).read_metadata()
++        for tp in metadata.state_dict_metadata.values():
++            if isinstance(tp, TensorStorageMetadata):
++                props = tp.properties.__dict__
++                if props.get("strides", None) is None:
++                    props.pop("strides", None)
++        return _orig(self, checkpoint_dir, metadata)
++
++    _compat._tensor_properties_compat = True
++    TorchDistLoadShardedStrategy.load_tensors_metadata = _compat
+diff --git a/fused_residual.py b/fused_residual.py
+new file mode 100644
+index 0000000..5c22c9b
+--- /dev/null
++++ b/fused_residual.py
+@@ -0,0 +1,543 @@
++import inspect
++
++import torch
++import triton
++import triton.language as tl
++from triton.language.extra import libdevice
++
++FWD_WARPS = 8
++BWD_BLOCK = 4096
++BWD_WARPS = 8
++
++_installed = False
++_te_installed = False
++_pending = None
++_stash = {}
++_next_fork = None
++NORM_BWD_FOLD = True
++_fork_ptr = None
++_pending_bwd = None
++
++
++@triton.jit
++def _add_norm_quant_kernel(r_ptr, o_ptr, w_ptr, s_ptr, q_ptr, rstd_ptr, scale_ptr, amax_ptr, sinv_ptr, EPS,
++                           H: tl.constexpr, BLOCK: tl.constexpr, ROUND_BF16: tl.constexpr):
++    row = tl.program_id(0).to(tl.int64)
++    offs = tl.arange(0, BLOCK)
++    mask = offs < H
++    base = row * H
++    r = tl.load(r_ptr + base + offs, mask=mask, other=0.0).to(tl.float32)
++    o = tl.load(o_ptr + base + offs, mask=mask, other=0.0).to(tl.float32)
++    s = (r + o).to(tl.bfloat16)
++    tl.store(s_ptr + base + offs, s, mask=mask)
++    sf = s.to(tl.float32)
++    ms = tl.sum(sf * sf, axis=0) / H
++    rstd = libdevice.div_rn(1.0, libdevice.sqrt_rn(ms + EPS))
++    tl.store(rstd_ptr + row, rstd)
++    w = tl.load(w_ptr + offs, mask=mask, other=0.0).to(tl.float32)
++    y = (sf * rstd) * w
++    if ROUND_BF16:
++        y = y.to(tl.bfloat16).to(tl.float32)
++    tl.atomic_max(amax_ptr, tl.max(tl.abs(y), axis=0))
++    scale = tl.load(scale_ptr)
++    tl.store(q_ptr + base + offs, (y * scale).to(q_ptr.dtype.element_ty), mask=mask)
++    if row == 0:
++        tl.store(sinv_ptr, libdevice.div_rn(1.0, scale))
++
++
++@triton.jit
++def _add_quant_kernel(a_ptr, b_ptr, g_ptr, q_ptr, scale_ptr, amax_ptr, sinv_ptr, N, BLOCK: tl.constexpr):
++    pid = tl.program_id(0).to(tl.int64)
++    offs = pid * BLOCK + tl.arange(0, BLOCK)
++    mask = offs < N
++    a = tl.load(a_ptr + offs, mask=mask, other=0.0).to(tl.float32)
++    b = tl.load(b_ptr + offs, mask=mask, other=0.0).to(tl.float32)
++    g = (a + b).to(tl.bfloat16)
++    tl.store(g_ptr + offs, g, mask=mask)
++    gf = g.to(tl.float32)
++    tl.atomic_max(amax_ptr, tl.max(tl.where(mask, tl.abs(gf), 0.0), axis=0))
++    scale = tl.load(scale_ptr)
++    tl.store(q_ptr + offs, (gf * scale).to(q_ptr.dtype.element_ty), mask=mask)
++    if pid == 0:
++        tl.store(sinv_ptr, libdevice.div_rn(1.0, scale))
++
++
++@triton.jit
++def _add_kernel(a_ptr, b_ptr, c_ptr, N, BLOCK: tl.constexpr):
++    offs = tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK)
++    mask = offs < N
++    a = tl.load(a_ptr + offs, mask=mask, other=0.0).to(tl.float32)
++    b = tl.load(b_ptr + offs, mask=mask, other=0.0).to(tl.float32)
++    tl.store(c_ptr + offs, (a + b).to(tl.bfloat16), mask=mask)
++
++
++def add_into(a, b, c):
++    n = a.numel()
++    _add_kernel[(triton.cdiv(n, BWD_BLOCK),)](a, b, c, n, BLOCK=BWD_BLOCK, num_warps=BWD_WARPS)
++
++
++_NON_TN = []
++
++
++def _non_tn_fp8_gemm():
++    if not _NON_TN:
++        from transformer_engine.pytorch.utils import is_non_tn_fp8_gemm_supported
++
++        _NON_TN.append(bool(is_non_tn_fp8_gemm_supported()))
++    return _NON_TN[0]
++
++
++_TORCH_FP8 = {}
++
++
++def _torch_fp8(te_dtype):
++    if not _TORCH_FP8:
++        import transformer_engine_torch as tex
++
++        _TORCH_FP8[int(tex.DType.kFloat8E4M3)] = torch.float8_e4m3fn
++        _TORCH_FP8[int(tex.DType.kFloat8E5M2)] = torch.float8_e5m2
++    return _TORCH_FP8[int(te_dtype)]
++
++
++def add_rmsnorm_quant(r, o, w, eps, quantizer, s=None, round_bf16=False):
++    H = w.numel()
++    T = r.numel() // H
++    if s is None:
++        s = torch.empty_like(r)
++    data = torch.empty(T, H, dtype=torch.uint8, device=r.device)
++    rstd = torch.empty(T, dtype=torch.float32, device=r.device)
++    sinv = torch.empty(1, dtype=torch.float32, device=r.device)
++    _add_norm_quant_kernel[(T,)](
++        r, o, w, s, data.view(_torch_fp8(quantizer.dtype)), rstd, quantizer.scale, quantizer.amax, sinv,
++        float(eps),
++        H=H, BLOCK=triton.next_power_of_2(H), ROUND_BF16=round_bf16,
++        num_warps=FWD_WARPS, enable_fp_fusion=False,
++    )
++    return s, data, rstd, sinv
++
++
++def add_quant(a, b, quantizer):
++    g = torch.empty_like(a)
++    data = torch.empty(a.shape, dtype=torch.uint8, device=a.device)
++    sinv = torch.empty(1, dtype=torch.float32, device=a.device)
++    n = a.numel()
++    _add_quant_kernel[(triton.cdiv(n, BWD_BLOCK),)](
++        a, b, g, data.view(_torch_fp8(quantizer.dtype)), quantizer.scale, quantizer.amax, sinv, n,
++        BLOCK=BWD_BLOCK, num_warps=BWD_WARPS, enable_fp_fusion=False,
++    )
++    return g, data, sinv
++
++
++@triton.jit
++def _norm_bwd_add_quant_kernel(dy_ptr, x_ptr, rstd_ptr, w_ptr, r_ptr, g_ptr, q_ptr, scale_ptr, amax_ptr, sinv_ptr,
++                               H: tl.constexpr, BLOCK: tl.constexpr, QUANT: tl.constexpr):
++    row = tl.program_id(0).to(tl.int64)
++    offs = tl.arange(0, BLOCK)
++    mask = offs < H
++    base = row * H
++    dy = tl.load(dy_ptr + base + offs, mask=mask, other=0.0).to(tl.float32)
++    x = tl.load(x_ptr + base + offs, mask=mask, other=0.0).to(tl.float32)
++    w = tl.load(w_ptr + offs, mask=mask, other=0.0).to(tl.float32)
++    rs = tl.load(rstd_ptr + row)
++    y = x * rs
++    dz = dy * w
++    m = tl.sum(dz * y, axis=0) / H
++    dx = (rs * (dz - y * m)).to(tl.bfloat16).to(tl.float32)
++    r = tl.load(r_ptr + base + offs, mask=mask, other=0.0).to(tl.float32)
++    g = (dx + r).to(tl.bfloat16)
++    tl.store(g_ptr + base + offs, g, mask=mask)
++    if QUANT:
++        gf = g.to(tl.float32)
++        tl.atomic_max(amax_ptr, tl.max(tl.where(mask, tl.abs(gf), 0.0), axis=0))
++        scale = tl.load(scale_ptr)
++        tl.store(q_ptr + base + offs, (gf * scale).to(q_ptr.dtype.element_ty), mask=mask)
++        if row == 0:
++            tl.store(sinv_ptr, libdevice.div_rn(1.0, scale))
++
++
++NBWD_WARPS = 8
++
++
++def norm_bwd_add_quant(dy, x, rstd, w, r, quantizer=None, g=None):
++    H = w.numel()
++    T = x.numel() // H
++    if g is None:
++        g = torch.empty_like(r)
++    if quantizer is not None:
++        data = torch.empty(T, H, dtype=torch.uint8, device=x.device)
++        sinv = torch.empty(1, dtype=torch.float32, device=x.device)
++        q8, scale, amax = data.view(_torch_fp8(quantizer.dtype)), quantizer.scale, quantizer.amax
++    else:
++        data = sinv = None
++        q8 = scale = amax = rstd
++    _norm_bwd_add_quant_kernel[(T,)](
++        dy, x, rstd, w, r, g, q8, scale, amax, sinv if sinv is not None else rstd,
++        H=H, BLOCK=triton.next_power_of_2(H), QUANT=quantizer is not None,
++        num_warps=NBWD_WARPS, enable_fp_fusion=False,
++    )
++    return g, data, sinv
++
++
++def _float8(data, sinv, quantizer, fake_dtype):
++    if quantizer.internal:
++        from transformer_engine.pytorch.tensor.storage.float8_tensor_storage import Float8TensorStorage
++
++        return Float8TensorStorage(data=data, fp8_scale_inv=sinv, fp8_dtype=quantizer.dtype, fake_dtype=fake_dtype,
++                                   data_transpose=None, quantizer=quantizer)
++    from transformer_engine.pytorch.tensor.float8_tensor import Float8Tensor
++
++    return Float8Tensor(shape=data.shape, dtype=fake_dtype, data=data, fp8_scale_inv=sinv,
++                        fp8_dtype=quantizer.dtype, requires_grad=False, data_transpose=None,
++                        quantizer=quantizer, device=data.device)
++
++
++def _delayed_quantizer(q, te_dtype):
++    from transformer_engine.pytorch.tensor.float8_tensor import Float8Quantizer
++
++    if type(q) is not Float8Quantizer or int(q.dtype) != int(te_dtype):
++        return False
++    if not q.rowwise_usage:
++        return False
++    s, a = q.scale, q.amax
++    return (isinstance(s, torch.Tensor) and isinstance(a, torch.Tensor) and s.numel() == 1 and a.numel() == 1
++            and s.dtype == torch.float32 and a.dtype == torch.float32 and s.is_cuda and a.is_cuda)
++
++
++def _materialize():
++    global _pending
++    p, _pending = _pending, None
++    if p is not None:
++        s, r, o = p
++        add_into(r, o, s)
++
++
++class _DeferredAdd(torch.autograd.Function):
++
++    @staticmethod
++    def forward(ctx, residual, out):
++        global _pending
++        if _pending is not None:
++            raise RuntimeError("fused_residual: a deferred residual add was not consumed before the next one")
++        s = torch.empty_like(residual)
++        _pending = (s, residual, out)
++        return s
++
++    @staticmethod
++    def backward(ctx, g):
++        return g, g
++
++
++def deferred_add(residual, out):
++    return _DeferredAdd.apply(residual, out)
++
++
++class _ResidualFork(torch.autograd.Function):
++
++    @staticmethod
++    def forward(ctx, x, quantizer):
++        global _fork_ptr
++        ctx.quantizer = quantizer
++        if NORM_BWD_FOLD:
++            _fork_ptr = x.data_ptr()
++        return x.view_as(x), x.view_as(x)
++
++    @staticmethod
++    def backward(ctx, ga, gb):
++        global _pending_bwd
++        import transformer_engine_torch as tex
++
++        q = ctx.quantizer
++        p = _pending_bwd
++        if p is not None:
++            if ga is None or ga.data_ptr() != p[0].data_ptr() or ga.numel() != p[0].numel():
++                raise RuntimeError("fused_residual: a deferred RMSNorm backward did not reach its residual fork")
++            _pending_bwd = None
++            _, dy, x, rstd, w = p
++            r = torch.zeros_like(ga) if gb is None else gb.to(torch.bfloat16).contiguous()
++            if q is not None and not _delayed_quantizer_any_usage(q, tex.DType.kFloat8E5M2):
++                q = None
++            g, data, sinv = norm_bwd_add_quant(dy, x, rstd, w, r, q)
++            if q is not None:
++                stash_payload(g, data, sinv, q)
++            return g.view(ga.shape), None
++        return _stock_fork_backward(q, ga, gb), None
++
++
++def _stock_fork_backward(q, ga, gb):
++    import transformer_engine_torch as tex
++
++    if ga is None or gb is None:
++        return gb if ga is None else ga
++    if (q is None or ga.dtype != torch.bfloat16 or gb.dtype != torch.bfloat16 or ga.shape != gb.shape
++            or not ga.is_contiguous() or not gb.is_contiguous()
++            or not _delayed_quantizer_any_usage(q, tex.DType.kFloat8E5M2)):
++        return ga + gb
++    g, data, sinv = add_quant(ga, gb, q)
++    stash_payload(g, data, sinv, q)
++    return g
++
++
++def _delayed_quantizer_any_usage(q, te_dtype):
++    from transformer_engine.pytorch.tensor.float8_tensor import Float8Quantizer
++
++    if type(q) is not Float8Quantizer or int(q.dtype) != int(te_dtype):
++        return False
++    s, a = q.scale, q.amax
++    return (isinstance(s, torch.Tensor) and isinstance(a, torch.Tensor) and s.numel() == 1 and a.numel() == 1
++            and s.dtype == torch.float32 and a.dtype == torch.float32 and s.is_cuda and a.is_cuda)
++
++
++def residual_fork(x, quantizer):
++    return _ResidualFork.apply(x, quantizer)
++
++
++def _make_rmsnorm_fwd(stock, module_path=False):
++    def rmsnorm_fwd(x, w, eps, out, quantizer, otype, sm_margin, zero_centered_gamma):
++        global _pending
++        p = _pending
++        if p is not None:
++            s = p[0]
++            if x.data_ptr() != s.data_ptr() or x.numel() != s.numel():
++                if module_path:
++                    return stock(x, w, eps, out, quantizer, otype, sm_margin, zero_centered_gamma)
++                raise RuntimeError("fused_residual: an RMSNorm ran on another tensor while a residual add was deferred")
++            import transformer_engine_torch as tex
++
++            H = w.numel()
++            if (out is None and not zero_centered_gamma and quantizer is not None
++                    and _delayed_quantizer(quantizer, tex.DType.kFloat8E4M3)
++                    and int(otype) == int(tex.DType.kBFloat16) and x.dtype == torch.bfloat16
++                    and w.dtype == torch.bfloat16 and w.is_contiguous() and x.is_contiguous()
++                    and x.dim() == 2 and x.shape[1] == H and H <= 16384
++                    and p[1].is_contiguous() and p[2].is_contiguous()):
++                _pending = None
++                _, data, rstd, sinv = add_rmsnorm_quant(p[1], p[2], w, eps, quantizer, s=s)
++                y = _float8(data, sinv, quantizer, torch.bfloat16)
++                if quantizer.columnwise_usage and not _non_tn_fp8_gemm():
++                    y._create_transpose()
++                return _mark_fork_norm(x, w, (y, None, rstd))
++            _materialize()
++        return _mark_fork_norm(x, w, stock(x, w, eps, out, quantizer, otype, sm_margin, zero_centered_gamma))
++
++    rmsnorm_fwd._fused_residual = True
++    return rmsnorm_fwd
++
++
++def _mark_fork_norm(x, w, result):
++    global _fork_ptr
++    if NORM_BWD_FOLD and _fork_ptr is not None and x.data_ptr() == _fork_ptr:
++        _fork_ptr = None
++        p = w._base if w._base is not None else w
++        if isinstance(p, torch.nn.Parameter) and not p.requires_grad:
++            result[2]._fused_residual_fork = True
++    return result
++
++
++def _make_rmsnorm_bwd(stock):
++    def rmsnorm_bwd(dy, x, rstd, w, sm_margin, zero_centered_gamma):
++        global _pending_bwd
++        H = w.numel()
++        if (getattr(rstd, "_fused_residual_fork", False) and not zero_centered_gamma
++                and dy.dtype == torch.bfloat16 and x.dtype == torch.bfloat16 and w.dtype == torch.bfloat16
++                and rstd.dtype == torch.float32 and dy.is_contiguous() and x.is_contiguous() and w.is_contiguous()
++                and x.dim() == 2 and x.shape[1] == H and dy.shape == x.shape and rstd.numel() == x.shape[0]
++                and H <= 16384):
++            if _pending_bwd is not None:
++                raise RuntimeError("fused_residual: a deferred RMSNorm backward was not consumed before the next one")
++            dx = torch.empty_like(dy)
++            _pending_bwd = (dx, dy.detach(), x.detach(), rstd.detach(), w.detach())
++            return dx, torch.empty_like(w)
++        return stock(dy, x, rstd, w, sm_margin, zero_centered_gamma)
++
++    rmsnorm_bwd._fused_residual = True
++    return rmsnorm_bwd
++
++
++def stash_payload(g, data, sinv, quantizer):
++    _stash[id(quantizer.amax)] = (g, data, sinv, quantizer.scale, quantizer.amax, quantizer.dtype)
++
++
++def _make_quantize_impl(stock):
++    def quantize_impl(self, tensor):
++        e = _stash.pop(id(self.amax), None) if _stash else None
++        if (e is not None and tensor.data_ptr() == e[0].data_ptr() and tensor.numel() == e[0].numel()
++                and self.scale is e[3] and self.amax is e[4] and int(self.dtype) == int(e[5])
++                and self.rowwise_usage and not self.columnwise_usage
++                and tensor.dtype == torch.bfloat16 and tensor.is_contiguous()):
++            return _float8(e[1].view(tensor.shape), e[2], self, tensor.dtype)
++        return stock(self, tensor)
++
++    quantize_impl._fused_residual = True
++    return quantize_impl
++
++
++def install_te_hooks():
++    global _te_installed
++    if _te_installed:
++        return
++    import transformer_engine.pytorch.cpp_extensions as te_cpp
++    import transformer_engine.pytorch.ops.basic.rmsnorm as ops_rmsnorm
++    from transformer_engine.pytorch.tensor.float8_tensor import Float8Quantizer
++
++    for name in ("rmsnorm_fwd", "rmsnorm_bwd"):
++        if not hasattr(te_cpp, name):
++            raise RuntimeError(f"fused_residual: transformer_engine cpp_extensions no longer binds {name}")
++    if not getattr(te_cpp.rmsnorm_fwd, "_fused_residual", False):
++        te_cpp.rmsnorm_fwd = _make_rmsnorm_fwd(te_cpp.rmsnorm_fwd, module_path=True)
++    if not getattr(te_cpp.rmsnorm_bwd, "_fused_residual", False):
++        te_cpp.rmsnorm_bwd = _make_rmsnorm_bwd(te_cpp.rmsnorm_bwd)
++
++    for name in ("rmsnorm_fwd", "rmsnorm_bwd"):
++        if not hasattr(ops_rmsnorm, name):
++            raise RuntimeError(f"fused_residual: te.ops RMSNorm no longer binds {name}")
++    sig = list(inspect.signature(Float8Quantizer.quantize_impl).parameters)
++    if sig != ["self", "tensor"]:
++        raise RuntimeError(f"fused_residual: Float8Quantizer.quantize_impl signature changed ({sig})")
++    if not getattr(ops_rmsnorm.rmsnorm_fwd, "_fused_residual", False):
++        ops_rmsnorm.rmsnorm_fwd = _make_rmsnorm_fwd(ops_rmsnorm.rmsnorm_fwd)
++    if not getattr(Float8Quantizer.quantize_impl, "_fused_residual", False):
++        Float8Quantizer.quantize_impl = _make_quantize_impl(Float8Quantizer.quantize_impl)
++    if not getattr(ops_rmsnorm.rmsnorm_bwd, "_fused_residual", False):
++        ops_rmsnorm.rmsnorm_bwd = _make_rmsnorm_bwd(ops_rmsnorm.rmsnorm_bwd)
++    _te_installed = True
++
++
++def _fp8_delayed():
++    from transformer_engine.pytorch.quantization import FP8GlobalStateManager
++
++    return FP8GlobalStateManager.is_fp8_enabled() and FP8GlobalStateManager.get_fp8_recipe().delayed()
++
++
++def _layer_eval_ok(layer):
++    return not layer.training and _layer_cfg_ok(layer)
++
++
++def _layer_ok(layer):
++    return layer.training and torch.is_grad_enabled() and _layer_cfg_ok(layer)
++
++
++def _layer_cfg_ok(layer):
++    cfg = layer.config
++    return (not cfg.fp32_residual_connection
++            and getattr(cfg, "recompute_granularity", None) is None
++            and not getattr(layer, "recompute_input_layernorm", False)
++            and not getattr(layer, "recompute_pre_mlp_layernorm", False)
++            and not getattr(layer, "offload_attn_norm", False)
++            and not getattr(layer, "offload_mlp_norm", False)
++            and _fp8_delayed())
++
++
++def _is_last_layer(layer):
++    from megatron.core import parallel_state
++
++    return (parallel_state.get_pipeline_model_parallel_world_size() != 1
++            or layer.layer_number >= layer.config.num_layers)
++
++
++def _branch_grad_quantizer(seq):
++    from transformer_engine.pytorch.ops.basic.basic_linear import BasicLinear
++
++    ops = [m for m in seq.modules() if isinstance(m, BasicLinear)]
++    if not ops:
++        return None
++    try:
++        return ops[-1].get_quantizer("backward", 0)
++    except Exception:
++        return None
++
++
++def _proj_grad_quantizer(layer):
++    lp = getattr(layer.self_attention, "linear_proj", None)
++    br = getattr(lp, "_fused_branches", None)
++    if not br or not getattr(lp, "_adapter_enabled", False):
++        return None
++    return _branch_grad_quantizer(br[0])
++
++
++def _fc2_grad_quantizer(layer):
++    fi = getattr(layer.mlp, "_fused_impl", None)
++    if not fi:
++        return None
++    return _branch_grad_quantizer(fi[0])
++
++
++def _sbh(t):
++    return isinstance(t, torch.Tensor) and t.dtype == torch.bfloat16 and t.dim() == 3 and t.is_contiguous()
++
++
++def _wrap_bda(layer_ref, orig_bda, site):
++    def bda(training, fused):
++        f = orig_bda(training, fused)
++
++        def run(x_with_bias, residual, prob):
++            global _next_fork
++            layer = layer_ref()
++            x, bias = x_with_bias
++            last = _is_last_layer(layer)
++            if (bias is None and prob == 0 and _sbh(x) and _sbh(residual) and x.shape == residual.shape
++                    and ((training and _layer_ok(layer)) or (not training and _layer_eval_ok(layer)))
++                    and not (site == "mlp" and last)):
++                out = deferred_add(residual, x)
++            else:
++                out = f(x_with_bias, residual, prob)
++            if site == "mlp" and not last and _layer_ok(layer):
++                _next_fork = (out, layer.layer_number, _fc2_grad_quantizer(layer))
++            return out
++
++        return run
++
++    return bda
++
++
++def install():
++    global _installed
++    if _installed:
++        return
++    import weakref
++
++    from megatron.core.transformer.identity_op import IdentityOp
++    from megatron.core.transformer.transformer_layer import TransformerLayer
++
++    install_te_hooks()
++    for name in ("_run_input_layernorm", "_pre_mlp_layernorm_and_residual"):
++        if not hasattr(TransformerLayer, name):
++            raise RuntimeError(f"fused_residual: TransformerLayer.{name} missing")
++
++    orig_init = TransformerLayer.__init__
++
++    def __init__(self, *a, **kw):
++        orig_init(self, *a, **kw)
++        ref = weakref.ref(self)
++        self.self_attn_bda = _wrap_bda(ref, self.self_attn_bda, "attn")
++        self.mlp_bda = _wrap_bda(ref, self.mlp_bda, "mlp")
++
++    orig_in = TransformerLayer._run_input_layernorm
++    orig_mlp = TransformerLayer._pre_mlp_layernorm_and_residual
++
++    def _run_input_layernorm(self, hidden_states, *a, **kw):
++        global _next_fork
++        nf, _next_fork = _next_fork, None
++        ln_out, residual, state = orig_in(self, hidden_states, *a, **kw)
++        if (nf is not None and isinstance(hidden_states, torch.Tensor)
++                and nf[0].data_ptr() == hidden_states.data_ptr() and nf[0].shape == hidden_states.shape
++                and nf[1] + 1 == self.layer_number
++                and nf[2] is not None and ln_out is hidden_states and residual is hidden_states
++                and isinstance(self.input_layernorm, IdentityOp) and not state
++                and _sbh(hidden_states) and _layer_ok(self)):
++            ln_out, residual = residual_fork(hidden_states, nf[2])
++        return ln_out, residual, state
++
++    def _pre_mlp_layernorm_and_residual(self, hidden_states, *a, **kw):
++        ln_out, residual, state = orig_mlp(self, hidden_states, *a, **kw)
++        if (ln_out is hidden_states and residual is hidden_states
++                and isinstance(self.pre_mlp_layernorm, IdentityOp) and not state
++                and _sbh(hidden_states) and _layer_ok(self)):
++            q = _proj_grad_quantizer(self)
++            if q is not None:
++                ln_out, residual = residual_fork(hidden_states, q)
++        return ln_out, residual, state
++
++    TransformerLayer.__init__ = __init__
++    TransformerLayer._run_input_layernorm = _run_input_layernorm
++    TransformerLayer._pre_mlp_layernorm_and_residual = _pre_mlp_layernorm_and_residual
++    _installed = True
+diff --git a/quantize_rowwise.py b/quantize_rowwise.py
+new file mode 100644
+index 0000000..0152b62
+--- /dev/null
++++ b/quantize_rowwise.py
+@@ -0,0 +1,22 @@
++_installed = False
++
++
++def install():
++    global _installed
++    if _installed:
++        return
++    from transformer_engine.pytorch.ops.basic.quantize import Quantize
++    from transformer_engine.pytorch.tensor.float8_tensor import Float8Quantizer
++
++    orig = Quantize.pre_fuser_forward
++
++    def pre_fuser_forward(self, *args, **kwargs):
++        orig(self, *args, **kwargs)
++        if not getattr(self, "_quantize_forward", False):
++            return
++        q = self.get_quantizer("forward", 0)
++        if type(q) is Float8Quantizer and q.columnwise_usage:
++            q.set_usage(rowwise=True, columnwise=False)
++
++    Quantize.pre_fuser_forward = pre_fuser_forward
++    _installed = True
+diff --git a/train.py b/train.py
+old mode 100755
+new mode 100755
+index 3af340a..882847a
+--- a/train.py
++++ b/train.py
+@@ -56,6 +56,14 @@ def main(cfg):
+ 
+     cfg = utils.resolve(cfg)
+ 
++    import fused_residual
++
++    fused_residual.install()
++
++    import quantize_rowwise
++
++    quantize_rowwise.install()
++
+     model_cfg = GPTModelProvider(
+         # Llama 2 70B architecture
+         hidden_size=8192,
+diff --git a/utils.py b/utils.py
+index 03dcc5c..6a7a67b 100644
+--- a/utils.py
++++ b/utils.py
+@@ -86,18 +86,34 @@ module = import_module("megatron.core.dist_checkpointing.serialization")
+ current = getattr(module, "force_all_tensors_to_non_fp8")
+ setattr(module, "force_all_tensors_to_non_fp8", force_all_tensors_to_non_fp8_patched)
+ 
++from dataloader_cycle import cyclic_iter_early_reset as _cyclic_iter_early_reset
++
++import megatron.bridge.data.loaders as _bridge_loaders
++_bridge_loaders.cyclic_iter = _cyclic_iter_early_reset
++
+ 
+ if os.getenv("FP8", "False") == "True":
+     import transformer_engine.common.recipe as te_recipe
+     import transformer_engine.pytorch as te
+     from megatron.bridge.models.gpt_provider import GPTModelProvider
+ 
++    if os.getenv("LOAD_CKPT", "False") == "True":
++        from fp8_checkpoint import install_cpu_checkpoint_staging, install_tensor_properties_compat
++
++        install_tensor_properties_compat()
++        install_cpu_checkpoint_staging()
++
+     _original_provide = GPTModelProvider.provide
+ 
+     def provide_with_fp8(self, pre_process=None, post_process=None, vp_stage=None):
+         recipe = te_recipe.DelayedScaling()
+         with te.fp8_model_init(recipe=recipe):
+-            return _original_provide(self, pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
++            model = _original_provide(self, pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
++        if os.getenv("LOAD_CKPT", "False") == "True":
++            from fp8_checkpoint import prepare_fp8_checkpoint_load
++
++            prepare_fp8_checkpoint_load(model)
++        return model
+ 
+     GPTModelProvider.provide = provide_with_fp8
+ 

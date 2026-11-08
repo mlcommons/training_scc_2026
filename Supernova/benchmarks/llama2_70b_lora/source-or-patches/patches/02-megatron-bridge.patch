@@ -1,0 +1,22 @@
+diff --git a/src/megatron/bridge/training/utils/train_utils.py b/src/megatron/bridge/training/utils/train_utils.py
+index ec3fdcc..a9f3a6b 100644
+--- a/src/megatron/bridge/training/utils/train_utils.py
++++ b/src/megatron/bridge/training/utils/train_utils.py
+@@ -453,6 +453,8 @@ def reduce_max_stat_across_model_parallel_group(
+         float: The maximum value of the statistic across the model parallel group,
+                or None if all ranks had None.
+     """
++    if torch.distributed.get_world_size(group=mp_group) == 1:
++        return stat
+     if stat is None:
+         stat = -1.0
+     stat = torch.tensor([stat], dtype=torch.float32, device=torch.cuda.current_device())
+@@ -473,6 +475,8 @@ def logical_and_across_model_parallel_group(input: bool, mp_group: "TorchProcess
+     Returns:
+         bool: The result of the logical AND across all ranks in the group.
+     """
++    if torch.distributed.get_world_size(group=mp_group) == 1:
++        return bool(input)
+     if input is True:
+         input = 1
+     else:

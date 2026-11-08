@@ -1,0 +1,59 @@
+diff --git a/transformer_engine/pytorch/attention/dot_product_attention/context_parallel.py b/transformer_engine/pytorch/attention/dot_product_attention/context_parallel.py
+index 9e181ac..629800c 100644
+--- a/transformer_engine/pytorch/attention/dot_product_attention/context_parallel.py
++++ b/transformer_engine/pytorch/attention/dot_product_attention/context_parallel.py
+@@ -512,6 +512,36 @@ def unrestore_thd_gathered_kv(x, cu_seqlens_padded, cp_size, load_balancing_stra
+     return thd_sequence_order_to_cp_rank_order(x, cu_seqlens_padded, cp_size)
+ 
+ 
++def _contig_wide(x: torch.Tensor) -> torch.Tensor:
++    """Contiguous copy of a byte-typed tensor through its widest integer view.
++
++    ``TensorIterator`` copies a uint8 tensor one byte per element. The same bytes
++    moved through int16/int32/int64 views give the same result with fewer
++    element-wise operations.
++    """
++    if x.is_contiguous():
++        return x
++    es = x.element_size()
++    wide = {1: torch.uint8, 2: torch.int16, 4: torch.int32, 8: torch.int64}
++    if es not in wide:
++        return x.contiguous()
++    xi = x.view(wide[es])
++    for w in (16, 8, 4, 2):
++        if w <= es or w not in wide:
++            continue
++        if (
++            x.stride(-1) == 1
++            and (x.shape[-1] * es) % w == 0
++            and (x.data_ptr() % w) == 0
++            and all((st * es) % w == 0 for st, s in zip(x.stride()[:-1], x.shape[:-1]) if s > 1)
++        ):
++            try:
++                return xi.view(wide[w]).contiguous().view(wide[es]).view(x.dtype)
++            except RuntimeError:
++                break
++    return x.contiguous()
++
++
+ def flash_attn_a2a_communicate(
+     a2a_inputs: Union[torch.Tensor, List[torch.Tensor]],
+     chunk_ids_for_a2a: torch.Tensor,
+@@ -598,7 +628,7 @@ def flash_attn_a2a_communicate(
+                 # [s, b, cp, h//cp, d] -> [cp, s, b, h//cp, d]
+                 # [b, cp, h//cp, s, d] -> [cp, b, h//cp, s, d]
+                 # [t, cp, h//cp, d] -> [cp, t, h//cp, d]
+-                a2a_inputs[i] = x.movedim(head_dim, 0).contiguous()
++                a2a_inputs[i] = _contig_wide(x.movedim(head_dim, 0))
+     else:
+         for i in range(len(a2a_inputs) + 2):
+             if 0 < i < len(a2a_inputs) + 1:
+@@ -654,7 +684,7 @@ def flash_attn_a2a_communicate(
+                         x = x.movedim(0, seq_dim_)
+                     else:
+                         seq_dim_ = 0
+-                    x = x.contiguous()
++                    x = _contig_wide(x)
+                     # [b, 2, s//2, cp, h//cp, d] -> [b*s, h, d]
+                     # [2, s//2, b, cp, h//cp, d] -> [s*b, h, d]
+                     # [b, cp, h//cp, 2, s//2, d] -> [b*h, s, d]
