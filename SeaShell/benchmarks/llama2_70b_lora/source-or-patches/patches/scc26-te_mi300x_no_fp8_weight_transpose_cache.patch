@@ -1,0 +1,60 @@
+--- a/transformer_engine/pytorch/module/linear.py
++++ b/transformer_engine/pytorch/module/linear.py
+@@ -1085,7 +1085,7 @@
+                    This can help in latency bound communication situations.
+                    Requires PyTorch version 2.7.0 or higher. When set to ``None``, standard all-reduce
+                    is used.
+-    keep_fp8_weight_transpose_cache: bool, default = `True`
++    keep_fp8_weight_transpose_cache: bool, default = `False`
+                 Controls whether to cache the FP8 weight transpose buffer during training.
+ 
+                 - If set to `True` (default), the FP8 weight transpose buffer is cached to avoid recomputation,
+@@ -1133,7 +1133,7 @@
+         symmetric_ar_type: Optional[str] = None,
+         save_original_input: bool = False,
+         name: Optional[str] = None,
+-        keep_fp8_weight_transpose_cache: bool = True,
++        keep_fp8_weight_transpose_cache: bool = False,
+         use_fsdp2: bool = False
+     ) -> None:
+         super().__init__()
+--- a/transformer_engine/pytorch/module/layernorm_linear.py
++++ b/transformer_engine/pytorch/module/layernorm_linear.py
+@@ -1162,7 +1162,7 @@
+                    This can help in latency bound communication situations.
+                    Requires PyTorch version 2.7.0 or higher. When set to ``None``, standard all-reduce
+                    is used.
+-    keep_fp8_weight_transpose_cache: bool, default = `True`
++    keep_fp8_weight_transpose_cache: bool, default = `False`
+                 Controls whether to cache the FP8 weight transpose buffer during training.
+ 
+                 - If set to `True` (default), the FP8 weight transpose buffer is cached to avoid recomputation, 
+@@ -1208,7 +1208,7 @@
+         delay_wgrad_compute: bool = False,
+         symmetric_ar_type: Optional[str] = None,
+         name: str = None,
+-        keep_fp8_weight_transpose_cache: bool = True,
++        keep_fp8_weight_transpose_cache: bool = False,
+         use_fsdp2: bool = False
+     ) -> None:
+         super().__init__()
+--- a/transformer_engine/pytorch/module/layernorm_mlp.py
++++ b/transformer_engine/pytorch/module/layernorm_mlp.py
+@@ -1808,7 +1808,7 @@
+                    This can help in latency bound communication situations.
+                    Requires PyTorch version 2.7.0 or higher. When set to ``None``, standard all-reduce
+                    is used.
+-    keep_fp8_weight_transpose_cache: bool, default = `True`
++    keep_fp8_weight_transpose_cache: bool, default = `False`
+                 Controls whether to cache the FP8 weight transpose buffer during training.
+ 
+                 - If set to `True` (default), the FP8 weight transpose buffer is cached to avoid recomputation,
+@@ -1862,7 +1862,7 @@
+         delay_wgrad_compute: bool = False,
+         symmetric_ar_type: Optional[str] = None,
+         checkpoint: bool = False,
+-        keep_fp8_weight_transpose_cache: bool = True,
++        keep_fp8_weight_transpose_cache: bool = False,
+         use_fsdp2: bool = False,
+     ) -> None:
+         super().__init__()
