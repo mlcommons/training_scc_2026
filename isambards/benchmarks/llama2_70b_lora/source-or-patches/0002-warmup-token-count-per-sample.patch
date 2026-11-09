@@ -1,0 +1,11 @@
+--- a/src/callbacks/custom_callbacks.py
++++ b/src/callbacks/custom_callbacks.py
+@@ -374,6 +374,8 @@
+         }
+ 
+         batch = default_collate([single_data] * self.cfg.micro_batch_size * get_num_microbatches())
++        # one token count per sample so it can be split into micro-batches
++        batch["token_count"] = [seq_length - 1 for _ in range(self.cfg.micro_batch_size * get_num_microbatches())]
+         if validation:
+             return repeat((batch, 0, 0))
+         return repeat(batch)
