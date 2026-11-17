@@ -1,0 +1,5 @@
+FROM nvcr.io/nvidia/pytorch:24.01-py3
+WORKDIR /workspace/ft-llm
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN MAX_JOBS=32 pip install --no-cache-dir flash-attn==2.4.1 --no-build-isolation

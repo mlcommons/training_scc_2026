@@ -1,0 +1,17 @@
+--- scripts/mlperf_logging_utils.py.orig	2026-11-15 20:43:00.463385726 -0500
++++ scripts/mlperf_logging_utils.py	2026-11-15 20:43:18.394353263 -0500
+@@ -79,10 +79,10 @@
+         self.submission_info = {
+             "submission_benchmark": "llama2_70b_lora",
+             "submission_division": "closed",
+-            "submission_org": "referece",
+-            "submission_platform": "referece",
+-            "submission_poc_name": "referece",
+-            "submission_poc_email": "referece",
++            "submission_org": "Clemson",
++            "submission_platform": "student_system",
++            "submission_poc_name": "CJ George",
++            "submission_poc_email": "lgeorge@coastal.edu",
+             "submission_status": "onprem",
+             "train_dataset_length": train_dataset_length,
+             "eval_dataset_length": eval_dataset_length,
