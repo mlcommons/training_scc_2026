@@ -1,0 +1,77 @@
+From b0798db6cd38bd182391e41f2ea4300c967d34e8 Mon Sep 17 00:00:00 2001
+From: Shivram Sambhus <shivram.sambhus@gmail.com>
+Date: Fri, 30 Oct 2026 15:25:02 +0100
+Subject: [PATCH 2/2] llama2_70b_lora (Dell, nemo): keep LoRA gradients correct
+ with TP comm overlap
+
+With TP_COMM_OVERLAP=True and LoRA, where the base weights are frozen,
+two Transformer Engine overlap settings change the training loss:
+
+- Bulk wgrad overlap. TE skips the wgrad GEMM of a frozen weight, but
+  LayerNormLinear (linear_qkv) runs its dgrad reduce-scatter inside that
+  GEMM, so the input gradient stays unreduced. This is a TE regression:
+  LayerNormMLP and the te.ops MLP still skip bulk wgrad for frozen
+  weights. Pass tp_comm_bulk_wgrad=False.
+- The ring_exchange reduce-scatter in the proj/fc2 forward. With bulk
+  wgrad off it still changed the loss after one optimizer step by
+  3.0e-3. The pipeline method did not, and we have not found the cause.
+  When the overlap config uses ring_exchange there (b100tp2mbs1,
+  b100tp4mbs1, h100tp2mbs1), use the plain reduce-scatter instead.
+
+Note that GPU_ARCH defaults to b, so TP_COMM_OVERLAP=True without
+GPU_ARCH=h loads b100tp<TP>mbs<MBS>.yaml.
+
+Tested on 4x A100 80GB PCIe (CUDA IPC, UB_SKIPMC=1), BF16, TP=4 with SP,
+full recompute, seed 1234. Train loss at step 2, after one optimizer
+step:
+
+  overlap off (unchanged code)               0.4713242
+  previous commit, b100tp4mbs1               0.4783207
+  previous commit, h100tp4mbs1               0.4768726
+  previous commit + bulk wgrad off, b100     0.4743286
+  this commit, b100tp4mbs1 (default)         0.4713475
+  this commit, h100tp4mbs1                   0.4713831
+
+All h100tp4mbs1 runs had atomic GEMM off.
+
+With the overlap off this commit changes nothing: Megatron-Core reads
+both settings only when tp_comm_overlap is set.
+
+Not tested here: FP8, CUDA multicast. Atomic GEMM reduce-scatter needs
+TE built with CUDA 12.
+---
+ train.py | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/train.py b/train.py
+index 50a5309..3a1daef 100755
+--- a/train.py
++++ b/train.py
+@@ -60,6 +60,12 @@ def main(cfg):
+     ub_tp_comm_overlap_cfg = None
+     if cfg.model.ub_tp_comm_overlap and cfg.model.get("ub_tp_comm_overlap_cfg") is not None:
+         ub_tp_comm_overlap_cfg = OmegaConf.to_container(cfg.model.ub_tp_comm_overlap_cfg)
++    # With ring_exchange for the proj/fc2 forward reduce-scatter the LoRA loss changed by 3.0e-3
++    # after one optimizer step (4x A100, BF16; cause not found). Use the plain reduce-scatter then.
++    tp_comm_overlap_rs = not any(
++        (ub_tp_comm_overlap_cfg or {}).get(name, {}).get("method") == "ring_exchange"
++        for name in ("proj_fprop", "fc2_fprop")
++    )
+ 
+     model_cfg = GPTModelProvider(
+         # Llama 2 70B architecture
+@@ -92,6 +98,11 @@ def main(cfg):
+         cp_comm_type=cfg.model.cp_comm_type,
+         tp_comm_overlap=cfg.model.ub_tp_comm_overlap,
+         tp_comm_overlap_cfg=ub_tp_comm_overlap_cfg,
++        tp_comm_overlap_rs=tp_comm_overlap_rs,
++        # LoRA freezes the base weights, so TE skips their wgrad GEMM. With bulk wgrad overlap,
++        # TE's LayerNormLinear (linear_qkv) runs the dgrad reduce-scatter inside that GEMM, so
++        # the input gradient stays unreduced (TE regression; LayerNormMLP and te.ops check this).
++        tp_comm_bulk_wgrad=False,
+         calculate_per_token_loss=False,
+         # Precision
+         fp8_dot_product_attention=cfg.model.fp8_dot_product_attention,
+-- 
+2.55.0
+
