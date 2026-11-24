@@ -1,0 +1,47 @@
+# source-or-patches
+
+Base: `mlcommons/training_results_v6.0`, commit
+`eabf23a07b2a0c60a289ff871dc3a46fff0d0421`, path
+`NVIDIA/benchmarks/llama2_70b_lora/implementations/nemo/`.
+
+Apply from the root of that implementation directory, pointing at this folder:
+
+```bash
+PATCHES=/path/to/benchmark/folder/source-or-patches
+patch -p1 < "$PATCHES/train.py.patch"
+patch -p1 < "$PATCHES/utils.py.patch"
+```
+
+Both patches were dry-run applied with `patch -p1` against the base tree.
+
+## Changed vendor files
+
+| file | patch | change |
+|---|---|---|
+| `train.py` | `train.py.patch` | Lazy-imports the optional `NVFP4Callback`. The eager import needs Transformer Engine NVFP4 symbols that are absent from the fallback container, even when `FP4=False`. |
+| `utils.py` | `utils.py.patch` | Normalizes `RANK`/`LOCAL_RANK` (set by torchrun) into `SLURM_PROCID`/`SLURM_LOCALID`, which the rest of the file already reads for rank-0 logging, device selection and OOM profiling. |
+
+## New file with no vendor baseline
+
+| file | note |
+|---|---|
+| `run_lora70b_triton_fix.sh` | Full Flux + Singularity + torchrun launcher used for the scored runs. Site paths are `/path/to/work` placeholders and the SIF bind is narrowed to `$WORK` (the site tree) instead of a wide host mount; logic is otherwise unchanged. It expects the NVIDIA NeMo tree at `$IMPL` and an optional `power_logger.py` at `$WORK` (only for the power CSV). Its container-body `PYTHONPATH` points at `$WORK/pylibs_h200` and `$WORK/Megatron-Bridge`, the overlay used on this node; those are not upstream files. It passes `bash -n`. |
+
+`run_lora70b_flux.sh` is the same launcher with three comment lines different;
+it is omitted to avoid a duplicate.
+
+## Checked in the vendor implementation tree, byte-identical (no patch)
+
+`config_common.sh`, `config_common_fp4.sh`, `config_mounts.sh`,
+`config_GB300_*.sh`, `conf/` (including `tp_overlap/h100tp4mbs1.yaml`),
+`callbacks*.py`, `run.sub`, the vendor `run_and_time.sh`, `Dockerfile`,
+`requirements.txt`, `expected-mounts.csv`, the vendor `README.md`, `scripts/`.
+
+The benchmark folder's `config.sh` and `run_and_time.sh` are new entry points,
+not patches to the vendor files. The Triton/libcuda fix also lives in
+`run_and_time.sh`; the full scored launcher is the file above.
+
+## Not included
+
+The container image, the NeMo/Megatron-Bridge source, `power_logger.py` (not in
+the training path), result logs and system metadata.
