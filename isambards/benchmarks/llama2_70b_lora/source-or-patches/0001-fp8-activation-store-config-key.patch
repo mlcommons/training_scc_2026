@@ -1,0 +1,11 @@
+--- a/src/conf/megatron_gpt_peft_tuning_config.yaml
++++ b/src/conf/megatron_gpt_peft_tuning_config.yaml
+@@ -91,7 +91,7 @@
+   fp8_interval: ${oc.decode:${oc.env:FP8_INTERVAL,1}}
+   fp8_margin: ${oc.decode:${oc.env:FP8_MARGIN,0}}
+   fp8_dot_product_attention: ${oc.decode:${oc.env:FP8_DPA,0}}
+-  fp8_activation_input_store: ${oc.decode:${oc.env:FP8_ACTIVATION,0}}
++  activation_func_fp8_input_store: ${oc.decode:${oc.env:FP8_ACTIVATION,0}} # store the SwiGLU input in FP8 for backprop
+   apply_rope_fusion: True
+   disable_parameter_transpose_cache: True
+ 
