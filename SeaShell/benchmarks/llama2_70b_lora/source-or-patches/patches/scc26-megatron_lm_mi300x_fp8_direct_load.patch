@@ -1,0 +1,13 @@
+--- a/megatron/core/dist_checkpointing/serialization.py
++++ b/megatron/core/dist_checkpointing/serialization.py
+@@ -115,7 +115,9 @@
+     #      params with a high-precision state dict;
+     #   2. When using delayed scaling, this loading process writes an extra value into the global
+     #      amax_history buffer of Transformer Engine, which is undesirable.
+-    force_all_tensors_to_non_fp8(sharded_state_dict)
++    # MI300X (TP=1): keep FP8 params in FP8 on load; dequantizing them all to BF16
++    # needs ~124 GiB extra per GPU. The loader reads each tensor straight into its FP8 param.
++    # force_all_tensors_to_non_fp8(sharded_state_dict)
+ 
+     common_state_dict = common_strategy.load_common(checkpoint_dir)
+ 
