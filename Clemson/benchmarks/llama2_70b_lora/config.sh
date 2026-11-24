@@ -1,0 +1,15 @@
+export TEAM=Clemson
+export PARTITION=debug
+export NODES=hades,hercules
+export IFACE=eno8303
+export HCAS=mlx5_0,mlx5_1
+export IMAGE=mlperf-llama2-lora:olympus
+export REPO=$HOME/training/llama2_70b_lora
+export LOGS=$HOME/training/logs
+export DATA_ROOT=/share/cjgeo/scc2026
+export DATASET_DIR=/share/cjgeo/scc2026/dataset
+export MODEL_DIR=/share/cjgeo/scc2026/model
+export RESULTS_DIR=$DATA_ROOT/results
+export SUBMIT=$HOME/scc/submission
+export TRAIN_SCRIPT=train_final.py
+export EVAL_BS=${EVAL_BS:-2}
