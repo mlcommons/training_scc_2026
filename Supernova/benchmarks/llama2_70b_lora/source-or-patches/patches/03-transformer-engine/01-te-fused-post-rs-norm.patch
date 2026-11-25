@@ -1,0 +1,218 @@
+diff --git a/transformer_engine/pytorch/module/layernorm_linear.py b/transformer_engine/pytorch/module/layernorm_linear.py
+index 561e8133..79f376dc 100644
+--- a/transformer_engine/pytorch/module/layernorm_linear.py
++++ b/transformer_engine/pytorch/module/layernorm_linear.py
+@@ -83,6 +83,8 @@ from ...debug.pytorch.debug_state import TEDebugState
+ from ..tensor.mxfp8_tensor import MXFP8Quantizer
+ from ..tensor.hybrid_tensor import HybridQuantizer
+ from ..tensor.identity_tensor import IdentityQuantizer
++from ..tensor.float8_tensor import Float8Quantizer
++from ..tensor.storage.float8_tensor_storage import Float8TensorStorage
+ from ..cpu_offload import (
+     is_cpu_offload_enabled,
+     start_offload,
+@@ -100,6 +102,23 @@ from ..cpp_extensions import (
+ __all__ = ["LayerNormLinear"]
+ 
+ 
++def _fused_post_rs_mod():
++    """The fused post-residual RMSNorm+quantize+userbuffer-fill kernel
++    (work-nemo/fused_post_rs_norm.py), or None when disabled or outside
++    the training image. NVTE_FUSED_POST_RS_NORM=1 enables it; the default
++    is off, so the recipe has to name it."""
++    if os.getenv("NVTE_FUSED_POST_RS_NORM", "0") != "1":
++        return None
++    try:
++        import fused_post_rs_norm
++    except ImportError:
++        return None
++    return fused_post_rs_norm
++
++
++_ub_token_cache = {}
++
++
+ class _LayerNormLinear(torch.autograd.Function):
+     """LayerNormLinear semi-top level module
+     Calls custom cuda extensions.
+@@ -252,70 +271,120 @@ class _LayerNormLinear(torch.autograd.Function):
+             and not identity
+         )
+ 
+-        # Apply normalization
+-        nvtx_range_push(f"{nvtx_label}.norm")
+-        ln_out, mu, rsigma = apply_normalization(
+-            inputmat,
+-            None,  # ln_out
+-            ln_weight,
+-            ln_bias,
+-            eps,
+-            input_quantizer if with_quantized_norm else None,
+-            inputmat.dtype,
+-            normalization,
+-            fwd_ln_sm_margin,
+-            zero_centered_gamma,
++        _fused_mod = _fused_post_rs_mod()
++        _t = inputmat.shape[0]
++        _cached_t = _ub_token_cache.get(id(ub_obj)) if ub_obj is not None else None
++        if ub_obj is not None and not ub_obj.with_cublasmp():
++            _ub_token_cache[id(ub_obj)] = _t
++        fused_post_rs = (
++            _fused_mod is not None
++            and fp8
++            and is_grad_enabled
++            and not fp8_calibration
++            and backward_override is None
++            and normalization == "RMSNorm"
++            and ln_bias is None
++            and not zero_centered_gamma
++            and return_layernorm_output
++            and not return_layernorm_output_gathered
++            and with_input_all_gather
++            and ub_overlap_ag_fprop
++            and not is_custom(input_quantizer)
++            and not isinstance(input_quantizer, (HybridQuantizer, IdentityQuantizer))
++            and isinstance(input_quantizer, Float8Quantizer)
++            and inputmat.dtype == torch.bfloat16
++            and inputmat.is_contiguous()
++            and not is_cpu_offload_enabled()
++            and _cached_t == _t
+         )
+-        nvtx_range_pop(f"{nvtx_label}.norm")
++        if fused_post_rs:
++            input_quantizer.set_usage(rowwise=True, columnwise=False)
++            ub_local = (
++                ub_obj.get_buffer(local_chunk=True)
++                .view(torch.uint8)
++                .reshape(inputmat.shape)
++            )
++            y, out8, rsigma = _fused_mod.fused_rs_norm_quant_ub(
++                inputmat, ln_weight, input_quantizer, ub_local=ub_local, eps=eps)
++            mu = None
++            ln_out_return = y
++            ln_out_hp = None
++            ln_out = input_quantizer.create_tensor_from_data(
++                out8, fake_dtype=activation_dtype)
++            global_shape = list(inputmat.shape)
++            global_shape[0] *= tp_world_size
++            ln_out_total = Float8TensorStorage(
++                data=ub_obj.get_buffer(shape=global_shape),
++                fp8_scale_inv=ln_out._scale_inv,
++                fp8_dtype=input_quantizer.dtype,
++                fake_dtype=activation_dtype,
++                quantizer=input_quantizer,
++            )
++        else:
++            # Apply normalization
++            nvtx_range_push(f"{nvtx_label}.norm")
++            ln_out, mu, rsigma = apply_normalization(
++                inputmat,
++                None,  # ln_out
++                ln_weight,
++                ln_bias,
++                eps,
++                input_quantizer if with_quantized_norm else None,
++                inputmat.dtype,
++                normalization,
++                fwd_ln_sm_margin,
++                zero_centered_gamma,
++            )
++            nvtx_range_pop(f"{nvtx_label}.norm")
+ 
+-        # Store unquantized layer norm output if we need to return it
+-        ln_out_return = None
+-        if return_layernorm_output or return_layernorm_output_gathered:
+-            ln_out_return = ln_out
+-        ln_out_hp = ln_out if backward_override == "high_precision" else None
++            # Store unquantized layer norm output if we need to return it
++            ln_out_return = None
++            if return_layernorm_output or return_layernorm_output_gathered:
++                ln_out_return = ln_out
++            ln_out_hp = ln_out if backward_override == "high_precision" else None
+ 
+-        # ------------------------------------------------------
+-        # Prepare GEMM input tensor
+-        # Note: Cast to expected dtype and perform tensor-parallel communication
+-        # ------------------------------------------------------
+-        nvtx_range_push(f"{nvtx_label}.gemm_input_cast_comm")
+-        ln_out_total = None
+-        if with_input_all_gather:
+-            if return_layernorm_output_gathered:
+-                # Perform all-gather in high precision if gathered
+-                # norm output will be returned
+-                ln_out_total, _ = gather_along_first_dim(ln_out, tp_group)
+-                ln_out_return = ln_out_total
+-                if fp8 or debug:
+-                    ln_out = input_quantizer(ln_out)
+-                    input_quantizer.set_usage(rowwise=True, columnwise=False)
+-                    ln_out_total = input_quantizer(ln_out_total)
++            # ------------------------------------------------------
++            # Prepare GEMM input tensor
++            # Note: Cast to expected dtype and perform tensor-parallel communication
++            # ------------------------------------------------------
++            nvtx_range_push(f"{nvtx_label}.gemm_input_cast_comm")
++            ln_out_total = None
++            if with_input_all_gather:
++                if return_layernorm_output_gathered:
++                    # Perform all-gather in high precision if gathered
++                    # norm output will be returned
++                    ln_out_total, _ = gather_along_first_dim(ln_out, tp_group)
++                    ln_out_return = ln_out_total
++                    if fp8 or debug:
++                        ln_out = input_quantizer(ln_out)
++                        input_quantizer.set_usage(rowwise=True, columnwise=False)
++                        ln_out_total = input_quantizer(ln_out_total)
++                else:
++                    quantizer = None
++                    if fp8 or debug:
++                        quantizer = input_quantizer
++                        # custom recipe doesn't need to support quantized AG
++                        if not with_quantized_norm and not custom:
++                            ln_out = quantizer(ln_out)
++                        quantizer.set_usage(rowwise=True, columnwise=False)
++                    if ub_overlap_ag_fprop:  # Initialize Userbuffers all-gather
++                        ln_out_total, _ = fill_userbuffers_buffer_for_all_gather(
++                            ub_obj,
++                            ln_out,
++                            quantizer,
++                            tp_group,
++                        )
++                    else:  # Perform NCCL all-gather
++                        ln_out_total, _ = gather_along_first_dim(
++                            ln_out,
++                            tp_group,
++                            quantizer=quantizer,
++                        )
+             else:
+-                quantizer = None
+-                if fp8 or debug:
+-                    quantizer = input_quantizer
+-                    # custom recipe doesn't need to support quantized AG
+-                    if not with_quantized_norm and not custom:
+-                        ln_out = quantizer(ln_out)
+-                    quantizer.set_usage(rowwise=True, columnwise=False)
+-                if ub_overlap_ag_fprop:  # Initialize Userbuffers all-gather
+-                    ln_out_total, _ = fill_userbuffers_buffer_for_all_gather(
+-                        ub_obj,
+-                        ln_out,
+-                        quantizer,
+-                        tp_group,
+-                    )
+-                else:  # Perform NCCL all-gather
+-                    ln_out_total, _ = gather_along_first_dim(
+-                        ln_out,
+-                        tp_group,
+-                        quantizer=quantizer,
+-                    )
+-        else:
+-            if (fp8 or debug) and not with_quantized_norm:
+-                ln_out = input_quantizer(ln_out)
+-            ln_out_total = ln_out
+-        nvtx_range_pop(f"{nvtx_label}.gemm_input_cast_comm")
++                if (fp8 or debug) and not with_quantized_norm:
++                    ln_out = input_quantizer(ln_out)
++                ln_out_total = ln_out
++            nvtx_range_pop(f"{nvtx_label}.gemm_input_cast_comm")
+         # ------------------------------------------------------
+         # GEMM input tensor is ready...
+         # ------------------------------------------------------

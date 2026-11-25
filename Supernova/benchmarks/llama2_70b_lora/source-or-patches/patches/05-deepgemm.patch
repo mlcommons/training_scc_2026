@@ -1,0 +1,1905 @@
+diff --git a/csrc/apis/gemm.hpp b/csrc/apis/gemm.hpp
+index 53e3d20..0bbd384 100644
+--- a/csrc/apis/gemm.hpp
++++ b/csrc/apis/gemm.hpp
+@@ -4,6 +4,7 @@
+ 
+ #include "../jit_kernels/impls/sm90_fp8_gemm_1d1d.hpp"
+ #include "../jit_kernels/impls/sm90_fp8_gemm_1d2d.hpp"
++#include "../jit_kernels/impls/sm90_fp8_gemm_per_tensor.hpp"
+ #include "../jit_kernels/impls/sm90_bf16_gemm.hpp"
+ #include "../jit_kernels/impls/sm100_fp8_fp4_gemm_1d1d.hpp"
+ #include "../jit_kernels/impls/sm100_bf16_gemm.hpp"
+@@ -132,6 +133,53 @@ static void fp8_fp4_gemm_nt(const std::pair<torch::Tensor, torch::Tensor>& a,
+     }
+ }
+ 
++// Per-tensor-scaled (delayed-scaling) FP8 GEMM: A [M,K] @ B [N,K].T -> D [M,N]
++// (bf16, or e4m3 when scale_d is given), with a single per-tensor dequant
++// multiply (scale_a * scale_b) in the epilogue. Operands may be e4m3 (forward)
++// or e5m2 (dgrad dy x w). Scales are 1-element float32 device tensors read by
++// the kernel at launch (CUDA-graph safe). For e4m3 D, scale_d is the output's
++// FORWARD scale: payload = value * scale_d (satfinite); the caller refreshes
++// scale_inv = 1 / scale_d after the GEMM. With amax_d (fp32[1]), e4m3 D also
++// atomically max-accumulates max |value| into it.
++static void fp8_gemm_nt_per_tensor(const torch::Tensor& a, const torch::Tensor& scale_a,
++                                   const torch::Tensor& b, const torch::Tensor& scale_b,
++                                   const torch::Tensor& d,
++                                   const std::string& compiled_dims = "nk",
++                                   const std::optional<std::string>& config = std::nullopt,
++                                   const torch::Tensor& scale_d = {},
++                                   const torch::Tensor& amax_d = {},
++                                   const torch::Tensor& c = {}) {
++    // Shape must be `[M, K] @ [N, K].T`
++    const auto major_a = get_major_type_ab(a);
++    const auto major_b = get_major_type_ab(b);
++
++    // C/D must be N-major
++    check_major_type_cd(d);
++
++    const auto [m, k] = get_shape<2>(a);
++    const auto [n, k_] = get_shape<2>(b);
++    const auto [m_, n_] = get_shape<2>(d);
++    DG_HOST_ASSERT(m == m_ and n == n_ and k == k_);
++    DG_HOST_ASSERT(k % 128 == 0 and "Per-tensor kernel requires K to be a multiple of 128");
++
++    // Early return for trivial cases (fp8 D must come with its scale).
++    std::optional<torch::Tensor> sfd;
++    if (d.scalar_type() == torch::kFloat8_e4m3fn)
++        sfd = scale_d;
++    if (early_return(m, n, k, d, std::nullopt, sfd))
++        return;
++
++    sm90_fp8_gemm_per_tensor(a, scale_a, b, scale_b, d, scale_d, m, n, k, major_a, major_b, compiled_dims, config, amax_d, c);
++}
++
++static void fp8_gemm_nn_per_tensor(const torch::Tensor& a, const torch::Tensor& scale_a,
++                                   const torch::Tensor& b, const torch::Tensor& scale_b,
++                                   const torch::Tensor& d,
++                                   const std::string& compiled_dims = "nk",
++                                   const std::optional<std::string>& config = std::nullopt) {
++    fp8_gemm_nt_per_tensor(a, scale_a, b.transpose(0, 1), scale_b, d, compiled_dims, config);
++}
++
+ static void fp8_fp4_gemm_nn(const std::pair<torch::Tensor, torch::Tensor>& a,
+                             const std::pair<torch::Tensor, torch::Tensor>& b,
+                             const torch::Tensor& d,
+@@ -833,8 +881,33 @@ static void batched_symm(const torch::Tensor& a, const torch::Tensor& b,
+ }
+ 
+ static void register_apis(pybind11::module_& m) {
++    // The per-tensor kernel accepts amax_d for BF16 output (overlapped 128-row kernel); this attribute advertises that.
++    m.attr("per_tensor_bf16_amax") = true;
+ 
+     // FP8 FP4 GEMMs
++    m.def("fp8_gemm_nt_per_tensor",
++          [](const torch::Tensor& a, const torch::Tensor& scale_a, const torch::Tensor& b,
++             const torch::Tensor& scale_b, pybind11::object d_obj, const std::string& compiled_dims,
++             const std::optional<std::string>& config, pybind11::object scale_d,
++             pybind11::object amax_d, pybind11::object c) {
++              torch::Tensor dt, sd, ad, ct;
++              if (not d_obj.is_none())
++                  dt = d_obj.cast<torch::Tensor>();
++              if (not scale_d.is_none())
++                  sd = scale_d.cast<torch::Tensor>();
++              if (not amax_d.is_none())
++                  ad = amax_d.cast<torch::Tensor>();
++              if (not c.is_none())
++                  ct = c.cast<torch::Tensor>();
++              fp8_gemm_nt_per_tensor(a, scale_a, b, scale_b, dt, compiled_dims, config, sd, ad, ct);
++          },
++          py::arg("a"), py::arg("scale_a"), py::arg("b"), py::arg("scale_b"),
++          py::arg("d") = pybind11::none(), py::arg("compiled_dims") = "nk", py::arg("config") = std::nullopt,
++          py::arg("scale_d") = pybind11::none(), py::arg("amax_d") = pybind11::none(),
++          py::arg("c") = pybind11::none());
++    m.def("fp8_gemm_nn_per_tensor", &fp8_gemm_nn_per_tensor,
++          py::arg("a"), py::arg("scale_a"), py::arg("b"), py::arg("scale_b"),
++          py::arg("d"), py::arg("compiled_dims") = "nk", py::arg("config") = std::nullopt);
+     m.def("fp8_fp4_gemm_nt", &fp8_fp4_gemm_nt,
+           py::arg("a"), py::arg("b"), py::arg("d"),
+           py::arg("c") = std::nullopt, py::arg("recipe") = std::nullopt,
+diff --git a/csrc/jit_kernels/heuristics/config.hpp b/csrc/jit_kernels/heuristics/config.hpp
+index a2dc769..bbdcb23 100644
+--- a/csrc/jit_kernels/heuristics/config.hpp
++++ b/csrc/jit_kernels/heuristics/config.hpp
+@@ -50,14 +50,19 @@ struct GemmDesc {
+         if (get_mma_kind() == MmaKind::BF16) {
+             DG_HOST_ASSERT(a_dtype == torch::kBFloat16 and b_dtype == torch::kBFloat16);
+         } else {
+-            DG_HOST_ASSERT(a_dtype == torch::kFloat8_e4m3fn or a_dtype == kPackedFP4);
+-            DG_HOST_ASSERT(b_dtype == torch::kFloat8_e4m3fn or b_dtype == kPackedFP4);
++            // e5m2 is only used by the per-tensor-scaled kernel entry
++            DG_HOST_ASSERT(a_dtype == torch::kFloat8_e4m3fn or a_dtype == torch::kFloat8_e5m2 or a_dtype == kPackedFP4);
++            DG_HOST_ASSERT(b_dtype == torch::kFloat8_e4m3fn or b_dtype == torch::kFloat8_e5m2 or b_dtype == kPackedFP4);
+         }
+-        // FP8 D implies casting with dynamic per-32 UE8M0 SFD output, only exposed for batched GEMMs
++        // FP8 D implies casting with an SFD output. Batched GEMMs use the
++        // dynamic per-32 UE8M0 path; the per-tensor kernel uses a single
++        // device scale (payload = value * scale_d) for Normal GEMMs too.
+         DG_HOST_ASSERT(cd_dtype == torch::kBFloat16 or cd_dtype == torch::kFloat or
+-                       (cd_dtype == torch::kFloat8_e4m3fn and gemm_type == GemmType::Batched and
+-                        not with_accumulation));
+-        DG_HOST_ASSERT(num_sms % 2 == 0);
++                       (cd_dtype == torch::kFloat8_e4m3fn and not with_accumulation));
++        // Odd SM counts are valid for cluster-1 launches (the persistent
++        // scheduler indexes by kNumSMs + blockIdx.x); multicast/cluster
++        // divisibility is enforced where configs are chosen.
++        DG_HOST_ASSERT(num_sms > 0);
+     }
+ 
+     friend std::ostream& operator << (std::ostream& os, const GemmDesc& desc) {
+diff --git a/csrc/jit_kernels/heuristics/sm90.hpp b/csrc/jit_kernels/heuristics/sm90.hpp
+index 144bfd1..5b2ebad 100644
+--- a/csrc/jit_kernels/heuristics/sm90.hpp
++++ b/csrc/jit_kernels/heuristics/sm90.hpp
+@@ -214,7 +214,10 @@ struct SM90ArchSpec {
+         const int wgmma_m = 64;
+         const int elem_size_ab = c10::elementSize(desc.a_dtype);
+         const int elem_size_cd = c10::elementSize(desc.cd_dtype);
+-        DG_HOST_ASSERT(desc.a_dtype == desc.b_dtype);
++        // Per-tensor kernel allows mixed fp8 operand types (e5m2 dy x e4m3 w)
++        DG_HOST_ASSERT(desc.a_dtype == desc.b_dtype or
++                       (desc.a_dtype == torch::kFloat8_e5m2 and desc.b_dtype == torch::kFloat8_e4m3fn) or
++                       (desc.a_dtype == torch::kFloat8_e4m3fn and desc.b_dtype == torch::kFloat8_e5m2));
+ 
+         // Data movement per block
+         int64_t expected_k = desc.get_expected_k();
+diff --git a/csrc/jit_kernels/impls/runtime_utils.hpp b/csrc/jit_kernels/impls/runtime_utils.hpp
+index c8dffd2..fcbf1b7 100644
+--- a/csrc/jit_kernels/impls/runtime_utils.hpp
++++ b/csrc/jit_kernels/impls/runtime_utils.hpp
+@@ -66,6 +66,7 @@ static std::string to_string(const at::ScalarType& dtype, const bool& fp4_unpack
+         case torch::kFloat:         return "float";
+         case torch::kBFloat16:      return "cutlass::bfloat16_t";
+         case torch::kFloat8_e4m3fn: return "cutlass::float_e4m3_t";
++        case torch::kFloat8_e5m2:   return "cutlass::float_e5m2_t";
+         case kPackedFP4:            return fp4_unpacked_smem ? "cutlass::detail::float_e2m1_unpacksmem_t"
+                                                              : "cutlass::float_e2m1_t";
+         default: DG_HOST_UNREACHABLE("Unsupported dtype");
+@@ -93,6 +94,7 @@ static CUtensorMapDataType aten_dtype_to_tensor_map_dtype(const at::ScalarType&
+         case torch::kFloat:         return CU_TENSOR_MAP_DATA_TYPE_FLOAT32;
+         case torch::kBFloat16:      return CU_TENSOR_MAP_DATA_TYPE_BFLOAT16;
+         case torch::kFloat8_e4m3fn: return CU_TENSOR_MAP_DATA_TYPE_UINT8;
++        case torch::kFloat8_e5m2:   return CU_TENSOR_MAP_DATA_TYPE_UINT8;
+         case kPackedFP4:            return fp4_unpacked_smem ? CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B
+                                                              : CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN8B;
+         default: DG_HOST_UNREACHABLE("Unsupported dtype");
+diff --git a/csrc/jit_kernels/impls/sm90_fp8_gemm_per_tensor.hpp b/csrc/jit_kernels/impls/sm90_fp8_gemm_per_tensor.hpp
+new file mode 100644
+index 0000000..e3d122b
+--- /dev/null
++++ b/csrc/jit_kernels/impls/sm90_fp8_gemm_per_tensor.hpp
+@@ -0,0 +1,367 @@
++// Copyright (c) 2026, Billy Cao
++// Host-side entry for the per-tensor-scaled SM90 FP8 GEMM (see
++// deep_gemm/impls/sm90_fp8_gemm_per_tensor.cuh). Derived from DeepGEMM's
++// sm90_fp8_gemm_1d2d.hpp (MIT License, Copyright (c) 2024 DeepSeek).
++#pragma once
++
++#include <cstdio>
++#include <cstdlib>
++#include <format>
++#include <optional>
++#include <torch/python.h>
++
++#include "../../runtime/runtime.hpp"
++#include "../../utils/exception.hpp"
++#include "../heuristics/sm90.hpp"
++
++#include "runtime_utils.hpp"
++
++namespace deep_gemm {
++
++class SM90FP8GemmPerTensorRuntime final {
++public:
++    struct Args {
++        GemmDesc gemm_desc;
++        GemmConfig gemm_config;
++        deep_jit::cuda::LaunchOptions options;
++
++        const void* scale_a;
++        const void* scale_b;
++        const void* scale_d = nullptr;
++        void* amax_d = nullptr;
++        CUtensorMap tensor_map_a;
++        CUtensorMap tensor_map_b;
++        CUtensorMap tensor_map_d;
++        uint32_t d_store_splits = 1;
++        bool legacy = false;
++        // Overlapped 128-row kernel, BF16 output: amax_d receives max |D| of the bf16-rounded output
++        bool amax_bf16 = false;
++        // Legacy kernel only: D = bf16(scale * A @ B^T) + C, C a BF16 [M, N]
++        // row-major addend with row stride ldc (nullptr = no addend)
++        const void* c = nullptr;
++        uint32_t ldc = 0;
++        // Legacy kernel only, with c: a second BF16 [M, N] addend at the same row stride, added after c
++        // (UB_TCCL: the peer's partial of the shard through its IPC mapping). nullptr = none, and the
++        // kernel instantiation string is then exactly the one-addend kernel's.
++        const void* c2 = nullptr;
++        // With c2: per-piece ready flags (uint32, non-zero = piece of c2 written) and the piece geometry; nullptr
++        // = c2 is complete before launch (UB_TCCL_EPI=1, the peer's mapping) and the kernel waits for nothing.
++        // Flags without c2 (kWaitC): they guard c itself, the single staged addend.
++        const void* c2_flags = nullptr;
++        uint32_t c2_piece_rows = 0, c2_piece_cols = 0;
++    };
++
++    static void compile_and_launch(const std::string& tag, const Args& args) {
++        const auto kernel = jit->compile(tag, std::format(R"(
++#include <deep_gemm/impls/{}>
++
++using namespace deep_gemm;
++
++static void __instantiate_kernel() {{
++    auto ptr = reinterpret_cast<void*>(&{}<
++        {}, {},
++        {}, {}, {},
++        {},
++        {}, {}, {},
++        {}, {}, {},
++        {},
++        {}, {},
++        {}, {},
++        {}, {},
++        {},
++        {}{}
++    >);
++}};
++)",
++        args.legacy ? "sm90_fp8_gemm_per_tensor_legacy.cuh" : "sm90_fp8_gemm_per_tensor.cuh",
++        // Kernel variant: legacy 128-row, 128-row overlapped-epilogue, or 192-row three-math-warp-group
++        args.legacy ? "sm90_fp8_gemm_per_tensor_legacy_impl" :
++            args.gemm_config.layout.block_m == 192 ? "sm90_fp8_gemm_per_tensor_3wg_impl" : "sm90_fp8_gemm_per_tensor_impl",
++        to_string(args.gemm_desc.a_dtype), to_string(args.gemm_desc.b_dtype),
++        get_compiled_dim(args.gemm_desc.m, 'm', args.gemm_desc.compiled_dims),
++        get_compiled_dim(args.gemm_desc.n, 'n', args.gemm_desc.compiled_dims),
++        get_compiled_dim(args.gemm_desc.k, 'k', args.gemm_desc.compiled_dims),
++        args.gemm_desc.num_groups,
++        args.gemm_config.layout.block_m, args.gemm_config.layout.block_n, args.gemm_config.layout.block_k,
++        args.gemm_config.storage_config.swizzle_a_mode, args.gemm_config.storage_config.swizzle_b_mode, args.gemm_config.storage_config.swizzle_cd_mode,
++        args.gemm_config.pipeline_config.num_stages,
++        args.gemm_config.launch_config.num_tma_threads, args.gemm_config.launch_config.num_math_threads,
++        args.gemm_config.layout.get_cluster_size(), args.gemm_config.layout.cluster_n > 1,
++        args.gemm_config.launch_config.num_sms, to_string(args.gemm_desc.gemm_type),
++        to_string(args.gemm_desc.cd_dtype), args.d_store_splits,
++        args.legacy ? std::format(", {}{}", args.c != nullptr,
++                                  args.c2 != nullptr ? ", true"
++                                  : (args.c2_flags != nullptr ? ", false, true" : ""))
++        // Overlapped 128-row kernel with addends (UB_TCCL_EPI=4): <..., kWithC, kWithC2, kWaitC>; without, unchanged
++        : (args.c != nullptr or args.amax_bf16)
++            ? std::format(", {}, {}, {}{}", args.c != nullptr, args.c2 != nullptr,
++                          args.c2 == nullptr and args.c2_flags != nullptr, args.amax_bf16 ? ", true" : "")
++        : std::string()));
++
++        // Launch
++        if (args.legacy) {
++            jit->launch(
++                kernel, args.options,
++                args.scale_a, args.scale_b, args.scale_d, args.amax_d, static_cast<int*>(nullptr),
++                args.gemm_desc.m, args.gemm_desc.n, args.gemm_desc.k,
++                args.tensor_map_a, args.tensor_map_b, args.tensor_map_d,
++                static_cast<const __nv_bfloat16*>(args.c), args.ldc,
++                static_cast<const __nv_bfloat16*>(args.c2),
++                static_cast<const uint32_t*>(args.c2_flags), args.c2_piece_rows, args.c2_piece_cols);
++        } else if (args.gemm_config.layout.block_m == 192) {
++            DG_HOST_ASSERT(args.c == nullptr and "The C addend is not supported by the 192-row kernel");
++            jit->launch(
++                kernel, args.options,
++                args.scale_a, args.scale_b, args.scale_d, args.amax_d, static_cast<int*>(nullptr),
++                args.gemm_desc.m, args.gemm_desc.n, args.gemm_desc.k,
++                args.tensor_map_a, args.tensor_map_b, args.tensor_map_d);
++        } else {
++            jit->launch(
++                kernel, args.options,
++                args.scale_a, args.scale_b, args.scale_d, args.amax_d, static_cast<int*>(nullptr),
++                args.gemm_desc.m, args.gemm_desc.n, args.gemm_desc.k,
++                args.tensor_map_a, args.tensor_map_b, args.tensor_map_d,
++                static_cast<const __nv_bfloat16*>(args.c), args.ldc, static_cast<const __nv_bfloat16*>(args.c2),
++                static_cast<const uint32_t*>(args.c2_flags), args.c2_piece_rows, args.c2_piece_cols);
++        }
++    }
++};
++
++// e5m2 x e5m2 WGMMA only supports N in {8, 16, 32, 64, 96, 128, 192, 256};
++// all other fp8 type combinations support every multiple of 8
++static bool is_block_n_legal_for_dtypes(const at::ScalarType& a_dtype, const at::ScalarType& b_dtype,
++                                        const int& block_n) {
++    if (a_dtype != torch::kFloat8_e5m2 or b_dtype != torch::kFloat8_e5m2)
++        return true;
++    return block_n == 8 or block_n == 16 or block_n == 32 or block_n == 64 or
++           block_n == 96 or block_n == 128 or block_n == 192 or block_n == 256;
++}
++
++struct PerTensorPlan {
++    GemmConfig config;
++    uint32_t d_store_splits;
++    bool legacy;
++};
++
++// Legacy kernel config ("legacy:block_m,block_n,1,1[,num_stages[,d_store_splits]]",
++// BF16 output only): 128-row BF16 staging (split by d_store_splits), full and
++// empty barrier arrays.
++static PerTensorPlan parse_legacy_config(const GemmDesc& desc, const std::string& cfg) {
++    int bm = 0, bn = 0, cm = 0, cn = 0, ns = 0, ds = 1;
++    const auto num_parsed = sscanf(cfg.c_str(), "%d,%d,%d,%d,%d,%d", &bm, &bn, &cm, &cn, &ns, &ds);
++    if (num_parsed < 6) ds = 1;
++    DG_HOST_ASSERT(desc.cd_dtype == torch::kBFloat16 and "Legacy per-tensor kernel: BF16 output only");
++    DG_HOST_ASSERT(num_parsed >= 4 and bm == 128 and bn > 0 and cm == 1 and cn == 1 and
++                   is_block_n_legal_for_dtypes(desc.a_dtype, desc.b_dtype, bn) and
++                   (ds == 1 or ds == 2) and bn % ds == 0 and "Invalid legacy per-tensor GEMM config");
++    const auto layout = Layout{0, bm, bn, 128, cm, cn};
++    auto storage_config = SM90ArchSpec::get_storage_config(desc, layout);
++    auto pipeline_config = SM90ArchSpec::get_pipeline_config(desc, layout, storage_config);
++    auto launch_config = SM90ArchSpec::get_launch_config(desc, layout);
++    const int smem_per_stage = (storage_config.load_block_m + storage_config.load_block_n) * layout.block_k;
++    const int smem_cd = ((bm * bn / ds * 2 + 1023) / 1024) * 1024;
++    const int smem_barriers = 16 * 8 * 2;
++    if (num_parsed >= 5 and ns > 0) {
++        DG_HOST_ASSERT(ns * smem_per_stage + smem_cd + smem_barriers <= 232448 and "Config override stages overflow smem");
++        pipeline_config.num_stages = ns;
++    } else {
++        pipeline_config.num_stages = std::min((232448 - smem_cd - smem_barriers) / smem_per_stage, 16);
++    }
++    pipeline_config.smem_size = smem_cd + smem_barriers + pipeline_config.num_stages * smem_per_stage;
++    return {GemmConfig{layout, storage_config, pipeline_config, launch_config}, static_cast<uint32_t>(ds), true};
++}
++
++// Parse "block_m,block_n,cluster_m,cluster_n[,num_stages[,d_store_splits]]" into a
++// full config override. `d_store_splits` = 2 stores a BF16 D tile through a
++// halved smem staging buffer (two column splits, written during the next
++// tile's mainloop), freeing smem for a deeper A/B pipeline. FP8 output always
++// uses one split (its whole-tile staging is already half the BF16 size).
++static PerTensorPlan parse_config_override(const GemmDesc& desc, const std::string& cfg) {
++    if (cfg.rfind("legacy:", 0) == 0)
++        return parse_legacy_config(desc, cfg.substr(7));
++    int bm = 0, bn = 0, cm = 0, cn = 0, ns = 0, ds = 1;
++    const auto num_parsed = sscanf(cfg.c_str(), "%d,%d,%d,%d,%d,%d", &bm, &bn, &cm, &cn, &ns, &ds);
++    if (num_parsed < 6) ds = 1;
++    const bool fp8_out = desc.cd_dtype == torch::kFloat8_e4m3fn;
++    if (fp8_out) ds = 1;
++    // 192-row BF16 tiles only fit the smem budget with split staging
++    if (bm == 192 and not fp8_out) ds = 2;
++    const int elem_cd = fp8_out ? 1 : 2;
++    DG_HOST_ASSERT(num_parsed >= 4 and (bm == 128 or bm == 192) and bn > 0 and cm == 1 and cn == 1 and
++                   is_block_n_legal_for_dtypes(desc.a_dtype, desc.b_dtype, bn) and
++                   (ds == 1 or ds == 2) and (bn / ds * elem_cd) % 128 == 0 and
++                   "Invalid per-tensor GEMM config override");
++    const auto layout = Layout{0, bm, bn, 128, cm, cn};
++    auto storage_config = SM90ArchSpec::get_storage_config(desc, layout);
++    auto pipeline_config = SM90ArchSpec::get_pipeline_config(desc, layout, storage_config);
++    auto launch_config = SM90ArchSpec::get_launch_config(desc, layout);
++    // One math warp-group per 64 rows; 192-row tiles issue TMA in-band (no producer warp-group)
++    launch_config.num_math_threads = bm / 64 * 128;
++    if (bm == 192)
++        launch_config.num_tma_threads = 0;
++    launch_config.num_threads = launch_config.num_tma_threads + launch_config.num_math_threads;
++
++    const int elem_ab = 1;  // fp8 operands
++    const int smem_per_stage = (storage_config.load_block_m + storage_config.load_block_n) * layout.block_k * elem_ab;
++    // D staging buffer (swizzled, per warp-group halves), possibly split in columns
++    const int smem_cd = bm * bn / ds * elem_cd;
++    const int smem_barriers = 16 * 8 * 3;  // full, empty, WG-ordering barriers (or release counters)
++
++    if (num_parsed >= 5 and ns > 0) {
++        DG_HOST_ASSERT(ns * smem_per_stage + smem_cd + smem_barriers <= 232448 and
++                       "Config override stages overflow smem");
++        pipeline_config.num_stages = ns;
++    } else {
++        pipeline_config.num_stages = std::min((232448 - smem_cd - smem_barriers) / smem_per_stage, 16);
++    }
++    pipeline_config.smem_size = smem_cd + smem_barriers + pipeline_config.num_stages * smem_per_stage;
++    return {GemmConfig{layout, storage_config, pipeline_config, launch_config},
++            static_cast<uint32_t>(ds), false};
++}
++
++// Default config by M and output dtype: 192 x 256 tiles for large M, the
++// overlapped-epilogue 128 x 256 kernel for FP8 output, the legacy 128 x 256
++// kernel for BF16 output; 3 pipeline stages.
++static std::string get_routed_config_per_tensor(const GemmDesc& desc) {
++    if (desc.m >= 6144)
++        return "192,256,1,1,3";
++    if (desc.cd_dtype == torch::kBFloat16)
++        return "legacy:128,256,1,1,3";
++    return "128,256,1,1,3";
++}
++
++static PerTensorPlan get_best_config_per_tensor(const GemmDesc& desc,
++                                             const std::optional<std::string>& config_override) {
++    desc.check_validity();
++
++    // An explicit config (other than "auto") overrides the default
++    if (config_override.has_value() and config_override.value() != "auto")
++        return parse_config_override(desc, config_override.value());
++    return parse_config_override(desc, get_routed_config_per_tensor(desc));
++}
++
++static void sm90_fp8_gemm_per_tensor(const torch::Tensor& a, const torch::Tensor& scale_a,
++                                     const torch::Tensor& b, const torch::Tensor& scale_b,
++                                     const torch::Tensor& d, const torch::Tensor& scale_d,
++                                     const int& m, const int& n, const int& k,
++                                     const cute::UMMA::Major& major_a, const cute::UMMA::Major& major_b,
++                                     const std::string& compiled_dims,
++                                     const std::optional<std::string>& config_override,
++                                     const torch::Tensor& amax_d = {},
++                                     const torch::Tensor& c = {},
++                                     const torch::Tensor& c2 = {},
++                                     const torch::Tensor& c2_flags = {},
++                                     const int& c2_piece_rows = 0, const int& c2_piece_cols = 0) {
++    const bool fp8_out = d.defined() and d.scalar_type() == torch::kFloat8_e4m3fn;
++    DG_HOST_ASSERT(not d.defined() or d.scalar_type() == torch::kBFloat16
++                   or (fp8_out and scale_d.defined()));
++    if (fp8_out) {
++        DG_HOST_ASSERT(scale_d.scalar_type() == torch::kFloat and scale_d.is_cuda()
++                       and scale_d.is_contiguous() and scale_d.numel() == 1);
++    }
++    if (amax_d.defined())
++        DG_HOST_ASSERT(amax_d.scalar_type() == torch::kFloat and amax_d.is_cuda()
++                       and amax_d.numel() == 1);
++    const bool amax_bf16 = amax_d.defined() and not fp8_out;
++    DG_HOST_ASSERT(major_a == cute::UMMA::Major::K and major_b == cute::UMMA::Major::K);
++    DG_HOST_ASSERT(a.scalar_type() == torch::kFloat8_e4m3fn or a.scalar_type() == torch::kFloat8_e5m2);
++    DG_HOST_ASSERT(b.scalar_type() == torch::kFloat8_e4m3fn or b.scalar_type() == torch::kFloat8_e5m2);
++    for (const auto& scale: {scale_a, scale_b}) {
++        DG_HOST_ASSERT(scale.scalar_type() == torch::kFloat and scale.is_cuda() and scale.is_contiguous());
++        DG_HOST_ASSERT(scale.numel() == 1);
++    }
++
++    const auto desc = GemmDesc {
++        .gemm_type = GemmType::Normal,
++        .kernel_type = KernelType::KernelNoSF,
++        .m = m, .n = n, .k = k, .num_groups = 1,
++        .a_dtype = a.scalar_type(), .b_dtype = b.scalar_type(),
++        .cd_dtype = d.defined() ? d.scalar_type() : torch::kBFloat16,
++        .major_a = major_a, .major_b = major_b,
++        .with_accumulation = false,
++        .num_sms = runtime->get_num_sms(),
++        .tc_util = runtime->get_tc_util(),
++        .compiled_dims = compiled_dims
++    };
++    auto [config, d_store_splits, legacy] = get_best_config_per_tensor(desc, config_override);
++    // New kernels: each math warp-group TMA-stores its own 64-row slice through
++    // 128B-swizzled atoms (the legacy kernel stores whole 128-row tiles)
++    if (not legacy) {
++        config.storage_config.swizzle_cd_mode = 128;
++        config.storage_config.store_block_m = 64;
++    }
++
++    DG_HOST_ASSERT(not amax_bf16 or (not legacy and config.layout.block_m == 128 and not c.defined()
++                   and "The BF16 amax needs the overlapped 128-row kernel without the C addend"));
++    if (c.defined()) {
++        DG_HOST_ASSERT((legacy or config.layout.block_m == 128) and not fp8_out and
++                       "The C addend needs a BF16-output 128-row kernel (legacy, or the overlapped one)");
++        DG_HOST_ASSERT(c.scalar_type() == torch::kBFloat16 and c.is_cuda() and c.dim() == 2
++                       and c.size(0) == m and c.size(1) == n and c.stride(1) == 1
++                       and c.stride(0) % 8 == 0
++                       and reinterpret_cast<uintptr_t>(c.data_ptr()) % 16 == 0);
++        DG_HOST_ASSERT(m % config.layout.block_m == 0 and n % config.layout.block_n == 0
++                       and "The C addend needs whole tiles");
++    }
++    DG_HOST_ASSERT(not c2_flags.defined() or c.defined());
++    if (c2.defined()) {
++        DG_HOST_ASSERT(c.defined() and c2.scalar_type() == torch::kBFloat16 and c2.dim() == 2
++                       and c2.size(0) == m and c2.size(1) == n and c2.stride(1) == 1 and c2.stride(0) == c.stride(0)
++                       and reinterpret_cast<uintptr_t>(c2.data_ptr()) % 16 == 0
++                       and "The second addend needs the C addend's shape and row stride");
++    }
++    DG_HOST_ASSERT(not c2_flags.defined() or (c2_flags.scalar_type() == torch::kInt32 and c2_flags.is_contiguous()
++                   and c2_piece_rows > 0 and c2_piece_cols > 0
++                   and c2_piece_rows % config.layout.block_m == 0 and c2_piece_cols % config.layout.block_n == 0
++                   and c2_flags.numel() >= ceil_div(m, c2_piece_rows) * ceil_div(n, c2_piece_cols)
++                   and "Staged-addend flags: int32, one per whole-tile piece"));
++
++    // Requires no TMA splits
++    DG_HOST_ASSERT(config.storage_config.swizzle_a_mode == config.layout.block_k);
++    DG_HOST_ASSERT(config.storage_config.swizzle_b_mode == config.layout.block_k);
++    const auto tensor_map_a = make_tma_a_desc(major_a, a, m, k,
++                                              config.storage_config.load_block_m,
++                                              config.layout.block_k,
++                                              static_cast<int>(a.stride(get_non_contiguous_dim(major_a))), 1,
++                                              config.storage_config.swizzle_a_mode);
++    const auto tensor_map_b = make_tma_b_desc(major_b, b, n, k,
++                                              config.storage_config.load_block_n,
++                                              config.layout.block_k,
++                                              static_cast<int>(b.stride(get_non_contiguous_dim(major_b))), 1,
++                                              config.storage_config.swizzle_b_mode);
++    const auto tensor_map_d = make_tma_cd_desc(d, m, static_cast<int>(d.size(-1)),
++                                               config.storage_config.store_block_m,
++                                               config.storage_config.store_block_n,
++                                               static_cast<int>(d.stride(-2)), 1,
++                                               config.storage_config.swizzle_cd_mode);
++
++    // Compile and launch
++    SM90FP8GemmPerTensorRuntime::compile_and_launch("sm90_fp8_gemm_per_tensor", {
++        .gemm_desc = desc,
++        .gemm_config = config,
++        .options = {
++            .num_smem_bytes = config.pipeline_config.smem_size,
++            .grid_dim = dim3(config.launch_config.num_sms, 1, 1),
++            .block_dim = dim3(config.launch_config.num_threads, 1, 1),
++            .cluster_dim = dim3(config.layout.get_cluster_size(), 1, 1),
++            .enable_pdl = false,
++        },
++        .scale_a = scale_a.data_ptr(),
++        .scale_b = scale_b.data_ptr(),
++        .scale_d = fp8_out ? scale_d.data_ptr() : nullptr,
++        .amax_d = amax_d.defined() ? amax_d.data_ptr() : nullptr,
++        .tensor_map_a = tensor_map_a,
++        .tensor_map_b = tensor_map_b,
++        .tensor_map_d = tensor_map_d,
++        .d_store_splits = d_store_splits,
++        .legacy = legacy,
++        .amax_bf16 = amax_bf16,
++        .c = c.defined() ? c.data_ptr() : nullptr,
++        .ldc = c.defined() ? static_cast<uint32_t>(c.stride(0)) : 0u,
++        .c2 = c2.defined() ? c2.data_ptr() : nullptr,
++        .c2_flags = c2_flags.defined() ? c2_flags.data_ptr() : nullptr,
++        .c2_piece_rows = static_cast<uint32_t>(c2_piece_rows), .c2_piece_cols = static_cast<uint32_t>(c2_piece_cols),
++    });
++}
++
++} // namespace deep_gemm
+diff --git a/deep_gemm/include/deep_gemm/impls/sm90_fp8_gemm_per_tensor.cuh b/deep_gemm/include/deep_gemm/impls/sm90_fp8_gemm_per_tensor.cuh
+new file mode 100644
+index 0000000..2476047
+--- /dev/null
++++ b/deep_gemm/include/deep_gemm/impls/sm90_fp8_gemm_per_tensor.cuh
+@@ -0,0 +1,936 @@
++// Copyright (c) 2026, Billy Cao
++// Per-tensor-scaled FP8 GEMM kernels for SM90, derived from DeepGEMM's
++// sm90_fp8_gemm_1d2d.cuh (MIT License, Copyright (c) 2024 DeepSeek).
++//
++// Differences vs the stock 1d2d kernel:
++//  - No scaling-factor machinery at all (no SFA TMA loads, no SFB staging,
++//    no per-k-block promotion FFMAs): with PER-TENSOR (delayed-scaling)
++//    scales the dequant multiply factors out of the GEMM mainloop entirely.
++//  - The wgmma accumulator accumulates across ALL k-blocks of a tile
++//    (fp32 accumulation, scale_d=One after the first block); a single
++//    epilogue multiplies each output tile by (scale_a * scale_b), both
++//    loaded from device memory (CUDA-graph safe, no host constants).
++//  - Operand dtype is templated: e4m3 (forward) or e5m2 (dgrad dy).
++//
++// Kernel variants (selected by the host per M and output dtype):
++//  - sm90_fp8_gemm_per_tensor_impl: 128 x BLOCK_N tile, producer warp-group +
++//    two math warp-groups; each warp-group converts its accumulators into
++//    packed registers at the tile boundary and stores them (swizzled staging
++//    -> TMA) during the next tile's mainloop.
++//  - sm90_fp8_gemm_per_tensor_3wg_impl: 192 x BLOCK_N tile, three math
++//    warp-groups, TMA issued in-band by the math warps.
++//  - sm90_fp8_gemm_per_tensor_legacy_impl (sm90_fp8_gemm_per_tensor_legacy.cuh):
++//    128 x BLOCK_N tile, BF16 output, epilogue after each tile's mainloop.
++// All variants accumulate every output element in the same k order, so
++// their outputs are bitwise identical.
++#pragma once
++
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wunknown-attributes"
++
++#include <cutlass/arch/barrier.h>
++#include <cutlass/arch/reg_reconfig.h>
++
++#include <cute/arch/cluster_sm90.hpp>
++#include <cute/arch/copy_sm90_desc.hpp>
++#include <cute/arch/copy_sm90_tma.hpp>
++
++#include <deep_gemm/comm/barrier.cuh>
++#include <deep_gemm/common/math.cuh>
++#include <deep_gemm/common/utils.cuh>
++#include <deep_gemm/common/tma_copy.cuh>
++#include <deep_gemm/common/types.cuh>
++#include <deep_gemm/mma/sm90.cuh>
++#include <deep_gemm/ptx/ld_st.cuh>
++#include <deep_gemm/ptx/utils.cuh>
++#include <deep_gemm/ptx/wgmma.cuh>
++#include <deep_gemm/scheduler/gemm.cuh>
++
++namespace deep_gemm {
++
++// Warp max of a non-negative per-thread amax, then one atomicMax per warp into
++// amax (fp32 bits compare as integers for non-negative values)
++CUTLASS_DEVICE void reduce_amax(float* amax, float value) {
++    // Ignore NaNs like the fmax reduction (a scale multiply can produce one).
++    // Non-negative IEEE-754 bits have exactly the same max ordering.
++    value = __uint_as_float(__reduce_max_sync(0xffffffff, __float_as_uint(fmaxf(value, 0.0f))));
++    if (amax != nullptr and cute::elect_one_sync() and value > 0.0f)
++        atomicMax(reinterpret_cast<int*>(amax), __float_as_int(value));
++}
++
++// MMA selector parametrized on the FP8 operand types (A x B).
++// e4m3 x e4m3, e5m2 x e4m3, e4m3 x e5m2: all N in [8, 256] step 8 (cute mma_sm90_gmma*.hpp)
++// e5m2 x e5m2: PTX ISA only defines N in {8, 16, 32, 64, 96, 128, 192, 256}
++template <int N, typename ab_a_dtype_t, typename ab_b_dtype_t>
++struct PerTensorMMASelector {
++    static constexpr auto select_mma() {
++        using namespace cute::SM90::GMMA;
++        if constexpr (std::is_same_v<ab_a_dtype_t, cutlass::float_e5m2_t> and
++                      std::is_same_v<ab_b_dtype_t, cutlass::float_e5m2_t>) {
++            if constexpr (N == 8)   return MMA_64x8x32_F32E5M2E5M2_SS_TN();
++            if constexpr (N == 16)  return MMA_64x16x32_F32E5M2E5M2_SS_TN();
++            if constexpr (N == 32)  return MMA_64x32x32_F32E5M2E5M2_SS_TN();
++            if constexpr (N == 64)  return MMA_64x64x32_F32E5M2E5M2_SS_TN();
++            if constexpr (N == 96)  return MMA_64x96x32_F32E5M2E5M2_SS_TN();
++            if constexpr (N == 128) return MMA_64x128x32_F32E5M2E5M2_SS_TN();
++            if constexpr (N == 192) return MMA_64x192x32_F32E5M2E5M2_SS_TN();
++            if constexpr (N == 256) return MMA_64x256x32_F32E5M2E5M2_SS_TN();
++        } else if constexpr (std::is_same_v<ab_a_dtype_t, cutlass::float_e5m2_t>) {
++            // A e5m2 x B e4m3 (dgrad: dy x W)
++            if constexpr (N == 8)   return MMA_64x8x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 16)  return MMA_64x16x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 24)  return MMA_64x24x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 32)  return MMA_64x32x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 40)  return MMA_64x40x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 48)  return MMA_64x48x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 56)  return MMA_64x56x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 64)  return MMA_64x64x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 72)  return MMA_64x72x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 80)  return MMA_64x80x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 88)  return MMA_64x88x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 96)  return MMA_64x96x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 104) return MMA_64x104x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 112) return MMA_64x112x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 120) return MMA_64x120x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 128) return MMA_64x128x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 136) return MMA_64x136x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 144) return MMA_64x144x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 152) return MMA_64x152x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 160) return MMA_64x160x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 168) return MMA_64x168x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 176) return MMA_64x176x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 184) return MMA_64x184x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 192) return MMA_64x192x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 200) return MMA_64x200x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 208) return MMA_64x208x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 216) return MMA_64x216x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 224) return MMA_64x224x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 232) return MMA_64x232x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 240) return MMA_64x240x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 248) return MMA_64x248x32_F32E5M2E4M3_SS_TN();
++            if constexpr (N == 256) return MMA_64x256x32_F32E5M2E4M3_SS_TN();
++        } else if constexpr (std::is_same_v<ab_b_dtype_t, cutlass::float_e5m2_t>) {
++            // A e4m3 x B e5m2
++            if constexpr (N == 8)   return MMA_64x8x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 16)  return MMA_64x16x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 24)  return MMA_64x24x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 32)  return MMA_64x32x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 40)  return MMA_64x40x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 48)  return MMA_64x48x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 56)  return MMA_64x56x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 64)  return MMA_64x64x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 72)  return MMA_64x72x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 80)  return MMA_64x80x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 88)  return MMA_64x88x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 96)  return MMA_64x96x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 104) return MMA_64x104x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 112) return MMA_64x112x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 120) return MMA_64x120x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 128) return MMA_64x128x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 136) return MMA_64x136x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 144) return MMA_64x144x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 152) return MMA_64x152x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 160) return MMA_64x160x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 168) return MMA_64x168x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 176) return MMA_64x176x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 184) return MMA_64x184x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 192) return MMA_64x192x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 200) return MMA_64x200x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 208) return MMA_64x208x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 216) return MMA_64x216x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 224) return MMA_64x224x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 232) return MMA_64x232x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 240) return MMA_64x240x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 248) return MMA_64x248x32_F32E4M3E5M2_SS_TN();
++            if constexpr (N == 256) return MMA_64x256x32_F32E4M3E5M2_SS_TN();
++        } else {
++            if constexpr (N == 8)   return MMA_64x8x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 16)  return MMA_64x16x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 24)  return MMA_64x24x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 32)  return MMA_64x32x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 40)  return MMA_64x40x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 48)  return MMA_64x48x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 56)  return MMA_64x56x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 64)  return MMA_64x64x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 72)  return MMA_64x72x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 80)  return MMA_64x80x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 88)  return MMA_64x88x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 96)  return MMA_64x96x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 104) return MMA_64x104x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 112) return MMA_64x112x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 120) return MMA_64x120x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 128) return MMA_64x128x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 136) return MMA_64x136x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 144) return MMA_64x144x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 152) return MMA_64x152x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 160) return MMA_64x160x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 168) return MMA_64x168x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 176) return MMA_64x176x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 184) return MMA_64x184x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 192) return MMA_64x192x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 200) return MMA_64x200x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 208) return MMA_64x208x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 216) return MMA_64x216x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 224) return MMA_64x224x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 232) return MMA_64x232x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 240) return MMA_64x240x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 248) return MMA_64x248x32_F32E4M3E4M3_SS_TN();
++            if constexpr (N == 256) return MMA_64x256x32_F32E4M3E4M3_SS_TN();
++        }
++        static_assert(N == 8 or N == 16 or N == 24 or N == 32 or N == 40 or N == 48 or
++                      N == 56 or N == 64 or N == 72 or N == 80 or N == 88 or N == 96 or
++                      N == 104 or N == 112 or N == 120 or N == 128 or N == 136 or
++                      N == 144 or N == 152 or N == 160 or N == 168 or N == 176 or
++                      N == 184 or N == 192 or N == 200 or N == 208 or N == 216 or
++                      N == 224 or N == 232 or N == 240 or N == 248 or N == 256,
++                      "Unsupported WGMMA N (e5m2 only supports 8/16/32/64/96/128/192/256)");
++    }
++
++    static constexpr auto select_type() {
++        return mma::sm90::FP8MMA<N, decltype(select_mma())>();
++    }
++
++    using type = decltype(select_type());
++};
++
++template <typename ab_a_dtype_t, typename ab_b_dtype_t,
++          uint32_t SHAPE_M, uint32_t SHAPE_N, uint32_t SHAPE_K,
++          uint32_t kNumGroups,
++          uint32_t BLOCK_M, uint32_t BLOCK_N, uint32_t BLOCK_K,
++          uint32_t kSwizzleAMode, uint32_t kSwizzleBMode, uint32_t kSwizzleDMode,
++          uint32_t kNumStages,
++          uint32_t kNumTMAThreads, uint32_t kNumMathThreads,
++          uint32_t kNumTMAMulticast, bool kIsTMAMulticastOnA,
++          uint32_t kNumSMs, GemmType kGemmType,
++          typename cd_dtype_t, uint32_t kDStoreSplits = 1,
++          bool kWithC = false, bool kWithC2 = false, bool kWaitC = false, bool kAmaxBF16 = false>
++CUTLASS_GLOBAL __launch_bounds__(kNumTMAThreads + kNumMathThreads, 1) void
++sm90_fp8_gemm_per_tensor_impl(const float* scale_a, const float* scale_b, const float* scale_d,
++                              float* amax_d,
++                              int* grouped_layout,
++                              uint32_t shape_m, uint32_t shape_n, uint32_t shape_k,
++                              const __grid_constant__ cute::TmaDescriptor tensor_map_a,
++                              const __grid_constant__ cute::TmaDescriptor tensor_map_b,
++                              const __grid_constant__ cute::TmaDescriptor tensor_map_d,
++                              const __nv_bfloat16* __restrict__ c_ptr = nullptr, uint32_t ldc = 0,
++                              const __nv_bfloat16* __restrict__ c2_ptr = nullptr,
++                              const uint32_t* __restrict__ c2_flags = nullptr,
++                              uint32_t c2_piece_rows = 0, uint32_t c2_piece_cols = 0) {
++#if (defined(__CUDA_ARCH__) and (__CUDA_ARCH__ >= 900)) or defined(__CLION_IDE__)
++    // C/D type: BF16, or e4m3 with a per-tensor output scale (scale_d, the
++    // output's FORWARD scale; payload = value * scale_d)
++    DG_STATIC_ASSERT(cute::is_same_v<cd_dtype_t, cutlass::bfloat16_t> or
++                     cute::is_same_v<cd_dtype_t, cutlass::float_e4m3_t>, "Invalid C/D data dtype");
++    constexpr bool kFP8Out = not cute::is_same_v<cd_dtype_t, cutlass::bfloat16_t>;
++    DG_STATIC_ASSERT((cute::is_same_v<ab_a_dtype_t, cutlass::float_e4m3_t> or
++                      cute::is_same_v<ab_a_dtype_t, cutlass::float_e5m2_t>) and
++                     (cute::is_same_v<ab_b_dtype_t, cutlass::float_e4m3_t> or
++                      cute::is_same_v<ab_b_dtype_t, cutlass::float_e5m2_t>), "Invalid A/B data dtype");
++    DG_STATIC_ASSERT(kGemmType == GemmType::Normal, "Per-tensor kernel only supports normal GEMM");
++    // Addends (UB_TCCL_EPI=4): BF16 C, then C2, added to the staged BF16 tile in the store phase -- which runs in the
++    // shadow of the next tile's WGMMAs -- with the legacy kernel's rounding (bf16(scale * acc) + C, then + C2).
++    // kWaitC / kWithC2 with flags: the last addend is staged by the copy engine and guarded per piece.
++    DG_STATIC_ASSERT(not ((kWithC or kWithC2 or kWaitC) and not cute::is_same_v<cd_dtype_t, cutlass::bfloat16_t>),
++                     "Addends need the BF16 output");
++    DG_STATIC_ASSERT(kWithC or not kWithC2, "The second addend rides the C addend path");
++    DG_STATIC_ASSERT(not kWaitC or (kWithC and not kWithC2), "kWaitC: the flags guard a single C addend");
++    // kAmaxBF16: amax_d receives max |D| of the bf16-rounded BF16 output (one atomicMax per warp)
++    DG_STATIC_ASSERT(not kAmaxBF16 or cute::is_same_v<cd_dtype_t, cutlass::bfloat16_t>, "kAmaxBF16 needs the BF16 output");
++    DG_STATIC_ASSERT(not kAmaxBF16 or not kWithC, "kAmaxBF16 does not combine with the addends");
++
++    // Types
++    using WGMMA = typename PerTensorMMASelector<BLOCK_N, ab_a_dtype_t, ab_b_dtype_t>::type;
++    using Barrier = cutlass::arch::ClusterTransactionBarrier;
++
++    // Layout: two math warp-groups, each owning one 64-row half of a
++    // BLOCK_M = 128 tile (one m64nBLOCK_Nk32 WGMMA per k-step), sharing the
++    // B stage. Each warp-group stores its own half of the output.
++    DG_STATIC_ASSERT(BLOCK_M == 2 * WGMMA::M and kNumMathThreads == 256, "Requires BLOCK_M = 128 with two math warp-groups");
++    DG_STATIC_ASSERT(kNumTMAMulticast == 1, "Per-tensor kernel is cluster-1 only");
++    DG_STATIC_ASSERT(kSwizzleDMode == 128, "Output staging uses the 128B-swizzled layout");
++
++    // Output staging: per warp-group, kAtomsPerSplit swizzle atoms of
++    // [64 rows x 128 bytes]. The tile is stored in kStoreSplits column
++    // splits that reuse the staging buffer (BF16 only; an FP8 tile fits).
++    constexpr uint32_t kOutElemBytes = kFP8Out ? 1 : 2;
++    constexpr uint32_t kAtomCols = 128 / kOutElemBytes;
++    constexpr uint32_t kStoreSplits = kFP8Out ? 1 : kDStoreSplits;
++    constexpr uint32_t kSplitCols = BLOCK_N / kStoreSplits;
++    DG_STATIC_ASSERT(BLOCK_N % kStoreSplits == 0 and kSplitCols % kAtomCols == 0, "Invalid D store split");
++    constexpr uint32_t kAtomsPerSplit = kSplitCols / kAtomCols;
++    constexpr uint32_t kAtomBytes = WGMMA::M * 128;
++    constexpr uint32_t kWGStagingBytes = kAtomsPerSplit * kAtomBytes;
++    static constexpr uint32_t SMEM_D_SIZE = 2 * kWGStagingBytes;
++    static constexpr uint32_t SMEM_A_SIZE_PER_STAGE = BLOCK_M * BLOCK_K * sizeof(ab_a_dtype_t);
++    static constexpr uint32_t SMEM_B_SIZE_PER_STAGE = BLOCK_N * BLOCK_K * sizeof(ab_b_dtype_t);
++    DG_STATIC_ASSERT(SMEM_D_SIZE % 1024 == 0, "Staging must keep the A/B stages 1024B-aligned");
++
++    // Overwrite shape constants if the compiler gives
++    shape_m = SHAPE_M != 0 ? SHAPE_M : shape_m;
++    shape_n = SHAPE_N != 0 ? SHAPE_N : shape_n;
++    shape_k = SHAPE_K != 0 ? SHAPE_K : shape_k;
++
++    // Configs
++    const uint32_t num_total_k_blocks = math::ceil_div(shape_k, BLOCK_K);
++    const uint32_t warp_idx = __shfl_sync(0xffffffff, threadIdx.x / 32, 0);
++    const uint32_t lane_idx = ptx::get_lane_idx();
++
++    // Prefetch TMA descriptors at the very beginning
++    if (warp_idx == kNumMathThreads / 32 and cute::elect_one_sync()) {
++        cute::prefetch_tma_descriptor(&tensor_map_a);
++        cute::prefetch_tma_descriptor(&tensor_map_b);
++        cute::prefetch_tma_descriptor(&tensor_map_d);
++    }
++    __syncwarp();
++
++    // Align to 1024 bytes for swizzle-128B
++    extern __shared__ __align__(1024) uint8_t smem_buffer[];
++
++    // Data on shared memory
++    auto smem_d = smem_buffer;
++    auto smem_a = utils::PatternVisitor([&](const uint32_t& i) {
++        return reinterpret_cast<ab_a_dtype_t*>(smem_buffer + SMEM_D_SIZE + i * SMEM_A_SIZE_PER_STAGE);
++    });
++    auto smem_b = utils::PatternVisitor([&](const uint32_t& i) {
++        return reinterpret_cast<ab_b_dtype_t*>(smem_buffer + SMEM_D_SIZE + kNumStages * SMEM_A_SIZE_PER_STAGE + i * SMEM_B_SIZE_PER_STAGE);
++    });
++
++    // Fill barriers
++    auto barrier_start_ptr = reinterpret_cast<Barrier*>(smem_buffer + SMEM_D_SIZE + kNumStages * (SMEM_A_SIZE_PER_STAGE + SMEM_B_SIZE_PER_STAGE));
++    auto full_barriers     = utils::PatternVisitor([&](const uint32_t& i) { return barrier_start_ptr + i; });
++    auto empty_barriers    = utils::PatternVisitor([&](const uint32_t& i) { return barrier_start_ptr + kNumStages + i; });
++    // WG0 -> WG1 issue ordering: WG0 arrives once it has issued a stage's WGMMAs
++    auto issued_barriers   = utils::PatternVisitor([&](const uint32_t& i) { return barrier_start_ptr + 2 * kNumStages + i; });
++
++    // Initialize barriers
++    if (warp_idx == kNumMathThreads / 32 + 1 and cute::elect_one_sync()) {
++        #pragma unroll
++        for (uint32_t i = 0; i < kNumStages; ++ i) {
++            full_barriers[i]->init(1);
++            empty_barriers[i]->init(kNumMathThreads / 32);
++            issued_barriers[i]->init(4);
++        }
++        // Make initialized barrier visible in async proxy
++        cutlass::arch::fence_barrier_init();
++    }
++
++    // Synchronize all threads to make barrier visible in normal memory model
++    __syncthreads();
++
++    // Register reconfigurations
++    // Math warp-groups hold accumulators (128) + the packed pending tile (64):
++    // give them 240 (2 x 128 x 240 + 128 x 24 = 64512 <= 65536)
++    constexpr uint32_t kNumTMARegisters = 40;
++    constexpr uint32_t kNumMathRegisters = 232;
++
++    // PDL (launched with enable_pdl): the setup above touches no global
++    // memory; wait for the upstream grid before any global read (A/B TMA
++    // loads, scale dereferences).
++    cudaGridDependencySynchronize();
++
++    // Block scheduler
++    uint32_t m_block_idx, n_block_idx;
++    auto scheduler = sched::Scheduler<kGemmType, BLOCK_M, BLOCK_N, kNumGroups, kNumTMAMulticast, kIsTMAMulticastOnA, kNumSMs>(shape_m, shape_n, shape_k, nullptr);
++
++    // Pipeline and TMA phases
++    uint32_t stage_idx = 0, phase = 0;
++    auto advance_pipeline = [&](uint32_t& k_block_idx) {
++        ++ k_block_idx;
++        // Flip phases only if reach the next first stage
++        stage_idx = stage_idx == kNumStages - 1 ? 0 : stage_idx + 1;
++        phase ^= stage_idx == 0;
++    };
++
++    if (warp_idx >= kNumMathThreads / 32) {
++        // TMA warp-group for loading data
++        cutlass::arch::warpgroup_reg_dealloc<kNumTMARegisters>();
++
++        // NOTES: only one thread (or warp) will be used
++        if (warp_idx == kNumMathThreads / 32 + 2 and cute::elect_one_sync()) {
++            // Persistently schedule over blocks
++            while (scheduler.get_next_block(m_block_idx, n_block_idx)) {
++                for (uint32_t k_block_idx = 0; k_block_idx < num_total_k_blocks; advance_pipeline(k_block_idx)) {
++                    // Wait consumer release
++                    empty_barriers[stage_idx]->wait(phase ^ 1);
++
++                    // Issue TMA A and B
++                    auto& full_barrier = *full_barriers[stage_idx];
++                    const uint32_t k_idx = k_block_idx * BLOCK_K;
++                    tma::copy<BLOCK_K, BLOCK_M, kSwizzleAMode, ab_a_dtype_t>(&tensor_map_a, &full_barrier,
++                             smem_a[stage_idx], k_idx, m_block_idx * BLOCK_M, 1, 0);
++                    tma::copy<BLOCK_K, BLOCK_N, kSwizzleBMode, ab_b_dtype_t>(&tensor_map_b, &full_barrier,
++                             smem_b[stage_idx], k_idx, n_block_idx * BLOCK_N, 1, 0);
++                    full_barrier.arrive_and_expect_tx(SMEM_A_SIZE_PER_STAGE + SMEM_B_SIZE_PER_STAGE);
++                }
++            }
++        }
++    } else {
++        // Math warp-groups for WGMMA
++        cutlass::arch::warpgroup_reg_alloc<kNumMathRegisters>();
++
++        // NOTES: use `__shfl_sync` to encourage NVCC to use unified registers
++        const auto math_wg_idx = __shfl_sync(0xffffffff, threadIdx.x / 128, 0);
++        const auto warp_in_wg = warp_idx % 4;
++
++        auto a_desc = mma::sm90::make_smem_desc(smem_a[0] + math_wg_idx * WGMMA::M * BLOCK_K, 1);
++        auto b_desc = mma::sm90::make_smem_desc(smem_b[0], 1);
++        const uint32_t a_desc_lo = __shfl_sync(0xffffffff, a_desc.reg32_[0], 0);
++        const uint32_t b_desc_lo = __shfl_sync(0xffffffff, b_desc.reg32_[0], 0);
++
++        // One accumulator set (64 x BLOCK_N per warp-group), reused across all k-blocks
++        float accum[WGMMA::kNumAccum];
++
++        // Issue one k-block's WGMMA group (one full-width m64nBLOCK_Nk32 per k-step)
++        auto issue_k_block = [&](const uint32_t& s, const bool& first_k_block) {
++            const auto a_base_lo = a_desc_lo + s * (SMEM_A_SIZE_PER_STAGE / 16);
++            const auto b_base_lo = b_desc_lo + s * (SMEM_B_SIZE_PER_STAGE / 16);
++            #pragma unroll
++            for (uint32_t i = 0; i < WGMMA::kNumAccum; ++ i)
++                ptx::warpgroup_fence_operand(accum[i]);
++            ptx::warpgroup_arrive();
++            #pragma unroll
++            for (uint32_t k = 0; k < BLOCK_K / WGMMA::K; ++ k) {
++                a_desc.reg32_[0] = a_base_lo + (k * WGMMA::K) / 16;
++                b_desc.reg32_[0] = b_base_lo + (k * WGMMA::K) / 16;
++                // Scale-D zero only on the first k-step of a tile
++                WGMMA::wgmma(a_desc, b_desc, accum, not first_k_block or k > 0);
++            }
++            ptx::warpgroup_commit_batch();
++            #pragma unroll
++            for (uint32_t i = 0; i < WGMMA::kNumAccum; ++ i)
++                ptx::warpgroup_fence_operand(accum[i]);
++        };
++
++        // Wait for a stage's data, then issue it. WG1 issues each stage only
++        // after WG0 has: the tensor pipe then runs WG0's group before WG1's,
++        // so the two warp-groups' tile boundaries are ~half a k-block apart
++        // and each boundary (drain, convert, next tile's first issue) runs in
++        // the shadow of the other warp-group's queued group.
++        auto const ready_barrier_start = barrier_start_ptr + (math_wg_idx == 0 ? 0 : 2 * kNumStages);
++        auto wait_and_issue = [&](const bool& first_k_block) {
++            // WG0 acquires the TMA completion before releasing issued. WG1's
++            // acquire of issued therefore also observes the completed TMA;
++            // waiting on full again is redundant. Keep all four WG0 arrivals
++            // and both WGs' empty credits so a stage cannot be reused early.
++            ready_barrier_start[stage_idx].wait(phase);
++            issue_k_block(stage_idx, first_k_block);
++            if (math_wg_idx == 0 and lane_idx == 0)
++                issued_barriers[stage_idx]->arrive();
++        };
++
++        // Packed output fragments of the previous tile: converted right after
++        // its mainloop (freeing `accum` for the next tile), then written out
++        // DURING the next tile's mainloop, in the shadow of its WGMMAs.
++        // Per 8-column chunk i: BF16 holds {row r, row r + 8} bf16x2 words;
++        // FP8 holds one word {lo16: row r e4m3x2, hi16: row r + 8 e4m3x2}.
++        constexpr uint32_t kNumChunks = BLOCK_N / 8;
++        constexpr uint32_t kNumPacked = kFP8Out ? kNumChunks : kNumChunks * 2;
++        constexpr uint32_t kChunksPerSplit = kNumChunks / kStoreSplits;
++        uint32_t packed[kNumPacked];
++        bool has_pending = false;
++        uint32_t pending_m_idx = 0, pending_n_idx = 0;
++
++        // Empty barrier arrival for a given stage
++        auto empty_barrier_arrive_at = [&](const uint32_t& s) {
++            lane_idx == 0 ? empty_barriers[s]->arrive() : void();
++        };
++
++        // Per-tensor scales (dequant multipliers).
++        // FP8 output: scale_d is the output's FORWARD scale (payload = value * scale_d).
++        const float output_scale = scale_a[0] * scale_b[0];
++        const float output_scale_d = kFP8Out ? scale_d[0] : 1.0f;
++        // FP8 output: max |accumulator| of this thread (amax_d = max |value|)
++        float amax_thr = 0.0f;
++        __nv_bfloat162 amax_bf16 = __float2bfloat162_rn(0.0f);
++
++        // Store one column split of the pending tile: registers -> swizzled
++        // staging (this warp-group's half) -> TMA store
++        const bool is_store_leader = warp_in_wg == 0 and lane_idx == 0;
++        const uint32_t named_barrier_idx = 2 + math_wg_idx;
++        uint8_t* wg_staging = smem_d + math_wg_idx * kWGStagingBytes;
++        auto store_split = [&](const uint32_t& split_idx) {
++            // The previous TMA store from this staging buffer must have finished reading it
++            if (is_store_leader)
++                cute::tma_store_wait<0>();
++            if constexpr (kWithC2 or kWaitC) {
++                // Staged last addend: wait for this split's piece before the barrier releases the warp-group
++                if (c2_flags != nullptr and is_store_leader) {
++                    const uint32_t pieces_per_row = (shape_n + c2_piece_cols - 1) / c2_piece_cols;
++                    const uint32_t piece = (pending_m_idx * BLOCK_M + math_wg_idx * WGMMA::M) / c2_piece_rows * pieces_per_row +
++                                           (pending_n_idx * BLOCK_N + split_idx * kSplitCols) / c2_piece_cols;
++                    uint32_t ready = 0;
++                    do {
++                        asm volatile("ld.acquire.gpu.global.b32 %0, [%1];" : "=r"(ready) : "l"(c2_flags + piece) : "memory");
++                    } while (ready == 0);
++                }
++            }
++            cutlass::arch::NamedBarrier::sync(128, named_barrier_idx);
++
++            #pragma unroll
++            for (uint32_t c = 0; c < kChunksPerSplit; ++ c) {
++                const uint32_t i = split_idx * kChunksPerSplit + c;
++                const uint32_t col = c * 8;  // column (elements) within the split
++                if constexpr (kFP8Out) {
++                    // Pair lanes (L, L ^ 1) exchange one e4m3x2 half each so every
++                    // lane owns 4 consecutive columns of one row (32-bit stores).
++                    // Even lanes keep row r (cols c..c+3), odd lanes row r + 8.
++                    if (c % 2 == 1)
++                        continue;
++                    const uint32_t p0 = packed[i], p1 = packed[i + 1];
++                    const bool odd = lane_idx & 1;
++                    const uint32_t send = odd ? __byte_perm(p0, p1, 0x5410) : __byte_perm(p0, p1, 0x7632);
++                    const uint32_t recv = __shfl_xor_sync(0xffffffff, send, 1);
++                    const uint32_t w0 = odd ? __byte_perm(recv, p0, 0x7610) : __byte_perm(p0, recv, 0x5410);
++                    const uint32_t w1 = odd ? __byte_perm(recv, p1, 0x7632) : __byte_perm(p1, recv, 0x7610);
++                    const uint32_t row = warp_in_wg * 16 + lane_idx / 4 + (odd ? 8 : 0);
++                    #pragma unroll
++                    for (uint32_t j = 0; j < 2; ++ j) {
++                        const uint32_t col_byte = col + j * 8 + ((lane_idx % 4) / 2) * 4;
++                        const uint32_t atom = col_byte / 128, in_atom = col_byte % 128;
++                        const uint32_t piece = (in_atom / 16) ^ (row % 8);
++                        auto ptr = wg_staging + atom * kAtomBytes + row * 128 + piece * 16 + in_atom % 16;
++                        ptx::st_shared(reinterpret_cast<uint32_t*>(ptr), j == 0 ? w0 : w1);
++                    }
++                } else {
++                    // STSM x2: lanes 0-7 address rows r..r+7 (matrix 0), lanes 8-15 rows r+8..r+15
++                    const uint32_t row = warp_in_wg * 16 + lane_idx % 16;
++                    const uint32_t atom = col / kAtomCols;
++                    const uint32_t piece = ((col % kAtomCols) / 8) ^ (row % 8);
++                    auto ptr = wg_staging + atom * kAtomBytes + row * 128 + piece * 16;
++                    ptx::SM90_U32x2_STSM_N<uint32_t>::copy(packed[i * 2], packed[i * 2 + 1], ptr);
++                }
++            }
++            if constexpr (kWithC) {
++                // The split is staged: consecutive threads add consecutive 16-byte vectors of a row (coalesced global
++                // reads) into their swizzled staging location, as the legacy kernel's epilogue does
++                cutlass::arch::NamedBarrier::sync(128, named_barrier_idx);
++                constexpr uint32_t kVecsPerRow = kSplitCols / 8;
++                constexpr uint32_t kNumVecs = WGMMA::M * kVecsPerRow;
++                DG_STATIC_ASSERT(kNumVecs % 128 == 0, "Invalid addend split");
++                const uint32_t m_base = pending_m_idx * BLOCK_M + math_wg_idx * WGMMA::M;
++                const uint32_t n_base = pending_n_idx * BLOCK_N + split_idx * kSplitCols;
++                #pragma unroll 4
++                for (uint32_t v = threadIdx.x % 128; v < kNumVecs; v += 128) {
++                    const uint32_t r = v / kVecsPerRow, col = (v % kVecsPerRow) * 8;
++                    const uint32_t piece = ((col % kAtomCols) / 8) ^ (r % 8);
++                    auto staged = wg_staging + (col / kAtomCols) * kAtomBytes + r * 128 + piece * 16;
++                    const auto* c_vec = reinterpret_cast<const uint4*>(c_ptr + static_cast<size_t>(m_base + r) * ldc + n_base + col);
++                    const auto c = kWaitC ? __ldcg(c_vec) : __ldg(c_vec);
++                    uint4 d = *reinterpret_cast<uint4*>(staged);
++                    auto* dh = reinterpret_cast<__nv_bfloat162*>(&d);
++                    const auto* ch = reinterpret_cast<const __nv_bfloat162*>(&c);
++                    #pragma unroll
++                    for (int q = 0; q < 4; ++ q) dh[q] = __hadd2(dh[q], ch[q]);
++                    if constexpr (kWithC2) {
++                        const auto c2 = __ldcg(reinterpret_cast<const uint4*>(
++                            c2_ptr + static_cast<size_t>(m_base + r) * ldc + n_base + col));
++                        const auto* c2h = reinterpret_cast<const __nv_bfloat162*>(&c2);
++                        #pragma unroll
++                        for (int q = 0; q < 4; ++ q) dh[q] = __hadd2(dh[q], c2h[q]);
++                    }
++                    *reinterpret_cast<uint4*>(staged) = d;
++                }
++            }
++            cute::tma_store_fence();
++            cutlass::arch::NamedBarrier::sync(128, named_barrier_idx);
++
++            if (is_store_leader) {
++                const uint32_t m_idx = pending_m_idx * BLOCK_M + math_wg_idx * WGMMA::M;
++                #pragma unroll
++                for (uint32_t atom = 0; atom < kAtomsPerSplit; ++ atom) {
++                    const uint32_t n_idx = pending_n_idx * BLOCK_N + split_idx * kSplitCols + atom * kAtomCols;
++                    cute::SM90_TMA_STORE_2D::copy(&tensor_map_d, wg_staging + atom * kAtomBytes, n_idx, m_idx);
++                }
++                cute::tma_store_arrive();
++            }
++        };
++
++        // Stores of the pending tile are spread over the next tile's k-blocks 1, 3, ...
++        constexpr uint32_t kSplitStoreStride = 2;
++        auto split_store_k_block = [](const uint32_t& s) { return 1 + s * kSplitStoreStride; };
++
++        // Convert the accumulators into `packed` (frees them for the next tile)
++        auto convert_accum = [&]() {
++            #pragma unroll
++            for (uint32_t i = 0; i < kNumChunks; ++ i) {
++                if constexpr (kFP8Out) {
++                    // payload = value * scale_ab * scale_d (satfinite)
++                    const float s = output_scale * output_scale_d;
++                    amax_thr = fmaxf(amax_thr, fmaxf(fmaxf(fabsf(accum[i * 4 + 0]), fabsf(accum[i * 4 + 1])),
++                                                     fmaxf(fabsf(accum[i * 4 + 2]), fabsf(accum[i * 4 + 3]))));
++                    const auto lo = __nv_cvt_float2_to_fp8x2({accum[i * 4 + 0] * s, accum[i * 4 + 1] * s}, __NV_SATFINITE, __NV_E4M3);
++                    const auto hi = __nv_cvt_float2_to_fp8x2({accum[i * 4 + 2] * s, accum[i * 4 + 3] * s}, __NV_SATFINITE, __NV_E4M3);
++                    packed[i] = static_cast<uint32_t>(lo) | (static_cast<uint32_t>(hi) << 16);
++                } else {
++                    // Apply the per-tensor dequant scale in the epilogue (single multiply)
++                    const auto lo = __float22bfloat162_rn({accum[i * 4 + 0] * output_scale, accum[i * 4 + 1] * output_scale});
++                    const auto hi = __float22bfloat162_rn({accum[i * 4 + 2] * output_scale, accum[i * 4 + 3] * output_scale});
++                    if constexpr (kAmaxBF16)
++                        amax_bf16 = __hmax2(amax_bf16, __hmax2(__habs2(lo), __habs2(hi)));
++                    packed[i * 2 + 0] = *reinterpret_cast<const uint32_t*>(&lo);
++                    packed[i * 2 + 1] = *reinterpret_cast<const uint32_t*>(&hi);
++                }
++            }
++        };
++
++        // Persistently schedule over blocks. The next tile's indices are
++        // computed inside the current mainloop (k-block 2), off the
++        // tile-to-tile critical path. K-block 0 of every tile is issued by the
++        // previous iteration's boundary code (or the prologue below).
++        uint32_t next_m_block_idx = 0, next_n_block_idx = 0, unused_k_counter = 0;
++        bool has_tile = scheduler.get_next_block(m_block_idx, n_block_idx);
++        if (has_tile)
++            wait_and_issue(true);
++        while (has_tile) {
++            bool next_valid = false, fetched_next = false;
++            uint32_t prev_stage = stage_idx;
++            advance_pipeline(unused_k_counter);
++
++            #pragma unroll 2
++            for (uint32_t k_block_idx = 1; k_block_idx < num_total_k_blocks; ++ k_block_idx) {
++                wait_and_issue(false);
++
++                // Previous tile's output and the next tile's indices, in the
++                // shadow of the WGMMAs just issued
++                if (has_pending) {
++                    #pragma unroll
++                    for (uint32_t s = 0; s < kStoreSplits; ++ s)
++                        if (k_block_idx == split_store_k_block(s))
++                            store_split(s);
++                }
++                if (k_block_idx == 2)
++                    next_valid = scheduler.get_next_block(next_m_block_idx, next_n_block_idx), fetched_next = true;
++
++                // The previous k-block's group has completed: release its stage
++                ptx::warpgroup_wait<1>();
++                empty_barrier_arrive_at(prev_stage);
++                prev_stage = stage_idx;
++                advance_pipeline(unused_k_counter);
++            }
++
++            // Flush pending splits a short mainloop did not reach (`packed` is reused below)
++            if (has_pending) {
++                #pragma unroll
++                for (uint32_t s = 0; s < kStoreSplits; ++ s)
++                    if (split_store_k_block(s) >= num_total_k_blocks)
++                        store_split(s);
++            }
++            if (not fetched_next)
++                next_valid = scheduler.get_next_block(next_m_block_idx, next_n_block_idx);
++
++            // Tile boundary: drain, convert, issue the next tile's first k-block
++            ptx::warpgroup_wait<0>();
++            empty_barrier_arrive_at(prev_stage);
++            convert_accum();
++            has_pending = true;
++            pending_m_idx = m_block_idx, pending_n_idx = n_block_idx;
++            if (next_valid)
++                wait_and_issue(true);
++            has_tile = next_valid;
++            m_block_idx = next_m_block_idx, n_block_idx = next_n_block_idx;
++        }
++
++        // Last tile: nothing left to overlap with
++        if (has_pending) {
++            #pragma unroll
++            for (uint32_t s = 0; s < kStoreSplits; ++ s)
++                store_split(s);
++        }
++        if (is_store_leader)
++            cute::tma_store_wait<0>();
++        if constexpr (kFP8Out)
++            reduce_amax(amax_d, amax_thr * output_scale);
++        if constexpr (kAmaxBF16)
++            reduce_amax(amax_d, fmaxf(__bfloat162float(amax_bf16.x), __bfloat162float(amax_bf16.y)));
++    }
++#else
++    if (blockIdx.x == 0 and threadIdx.x == 0)
++        DG_DEVICE_ASSERT(false and "This kernel only support sm_90a");
++#endif
++}
++
++// 192 x BLOCK_N tile with three math warp-groups (64 rows each, sharing the
++// B stage), which loads fewer operand bytes per FLOP than a 128-row tile.
++// The CTA is the 384 math threads only (a 512-thread CTA would cap every
++// thread at 128 registers, below what a 128-accumulator WGMMA needs). TMA
++// refills are issued in-band: the warp that releases a stage last (smem
++// counter) refills it with the k-block kNumStages steps ahead. Each
++// warp-group converts and stores its own 64-row slice right after its
++// mainloop. Warp-groups whose rows lie entirely past M skip their WGMMAs and
++// stores.
++template <typename ab_a_dtype_t, typename ab_b_dtype_t,
++          uint32_t SHAPE_M, uint32_t SHAPE_N, uint32_t SHAPE_K,
++          uint32_t kNumGroups,
++          uint32_t BLOCK_M, uint32_t BLOCK_N, uint32_t BLOCK_K,
++          uint32_t kSwizzleAMode, uint32_t kSwizzleBMode, uint32_t kSwizzleDMode,
++          uint32_t kNumStages,
++          uint32_t kNumTMAThreads, uint32_t kNumMathThreads,
++          uint32_t kNumTMAMulticast, bool kIsTMAMulticastOnA,
++          uint32_t kNumSMs, GemmType kGemmType,
++          typename cd_dtype_t, uint32_t kDStoreSplits = 1>
++CUTLASS_GLOBAL __launch_bounds__(kNumMathThreads, 1) void
++sm90_fp8_gemm_per_tensor_3wg_impl(const float* scale_a, const float* scale_b, const float* scale_d,
++                                  float* amax_d,
++                                  int* grouped_layout,
++                                  uint32_t shape_m, uint32_t shape_n, uint32_t shape_k,
++                                  const __grid_constant__ cute::TmaDescriptor tensor_map_a,
++                                  const __grid_constant__ cute::TmaDescriptor tensor_map_b,
++                                  const __grid_constant__ cute::TmaDescriptor tensor_map_d) {
++#if (defined(__CUDA_ARCH__) and (__CUDA_ARCH__ >= 900)) or defined(__CLION_IDE__)
++    DG_STATIC_ASSERT(cute::is_same_v<cd_dtype_t, cutlass::bfloat16_t> or
++                     cute::is_same_v<cd_dtype_t, cutlass::float_e4m3_t>, "Invalid C/D data dtype");
++    constexpr bool kFP8Out = not cute::is_same_v<cd_dtype_t, cutlass::bfloat16_t>;
++    DG_STATIC_ASSERT(kGemmType == GemmType::Normal, "Per-tensor kernel only supports normal GEMM");
++
++    using WGMMA = typename PerTensorMMASelector<BLOCK_N, ab_a_dtype_t, ab_b_dtype_t>::type;
++    using Barrier = cutlass::arch::ClusterTransactionBarrier;
++    constexpr uint32_t kNumMathWGs = BLOCK_M / WGMMA::M;
++    constexpr uint32_t kNumMathWarps = kNumMathThreads / 32;
++    DG_STATIC_ASSERT(BLOCK_M % WGMMA::M == 0 and kNumMathThreads == kNumMathWGs * 128, "One math warp-group per 64 rows");
++    DG_STATIC_ASSERT(kNumTMAThreads == 0, "In-band TMA issue: no producer warp-group");
++    DG_STATIC_ASSERT(kNumTMAMulticast == 1, "Per-tensor kernel is cluster-1 only");
++    DG_STATIC_ASSERT(kSwizzleDMode == 128, "Output staging uses the 128B-swizzled layout");
++
++    // Output staging per warp-group: kAtomsPerSplit atoms of [64 rows x 128 bytes];
++    // BF16 tiles are stored in kDStoreSplits sequential column splits
++    constexpr uint32_t kOutElemBytes = kFP8Out ? 1 : 2;
++    constexpr uint32_t kAtomCols = 128 / kOutElemBytes;
++    constexpr uint32_t kStoreSplits = kFP8Out ? 1 : kDStoreSplits;
++    constexpr uint32_t kSplitCols = BLOCK_N / kStoreSplits;
++    DG_STATIC_ASSERT(BLOCK_N % kStoreSplits == 0 and kSplitCols % kAtomCols == 0, "Invalid D store split");
++    constexpr uint32_t kAtomsPerSplit = kSplitCols / kAtomCols;
++    constexpr uint32_t kAtomBytes = WGMMA::M * 128;
++    constexpr uint32_t kWGStagingBytes = kAtomsPerSplit * kAtomBytes;
++    static constexpr uint32_t SMEM_D_SIZE = kNumMathWGs * kWGStagingBytes;
++    static constexpr uint32_t SMEM_A_SIZE_PER_STAGE = BLOCK_M * BLOCK_K * sizeof(ab_a_dtype_t);
++    static constexpr uint32_t SMEM_B_SIZE_PER_STAGE = BLOCK_N * BLOCK_K * sizeof(ab_b_dtype_t);
++    DG_STATIC_ASSERT(SMEM_D_SIZE % 1024 == 0 and SMEM_A_SIZE_PER_STAGE % 1024 == 0, "Stages must stay 1024B-aligned");
++
++    shape_m = SHAPE_M != 0 ? SHAPE_M : shape_m;
++    shape_n = SHAPE_N != 0 ? SHAPE_N : shape_n;
++    shape_k = SHAPE_K != 0 ? SHAPE_K : shape_k;
++
++    const uint32_t num_total_k_blocks = math::ceil_div(shape_k, BLOCK_K);
++    const uint32_t warp_idx = __shfl_sync(0xffffffff, threadIdx.x / 32, 0);
++    const uint32_t lane_idx = ptx::get_lane_idx();
++
++    if (warp_idx == 0 and cute::elect_one_sync()) {
++        cute::prefetch_tma_descriptor(&tensor_map_a);
++        cute::prefetch_tma_descriptor(&tensor_map_b);
++        cute::prefetch_tma_descriptor(&tensor_map_d);
++    }
++    __syncwarp();
++
++    extern __shared__ __align__(1024) uint8_t smem_buffer[];
++    auto smem_d = smem_buffer;
++    auto smem_a = utils::PatternVisitor([&](const uint32_t& i) {
++        return reinterpret_cast<ab_a_dtype_t*>(smem_buffer + SMEM_D_SIZE + i * SMEM_A_SIZE_PER_STAGE);
++    });
++    auto smem_b = utils::PatternVisitor([&](const uint32_t& i) {
++        return reinterpret_cast<ab_b_dtype_t*>(smem_buffer + SMEM_D_SIZE + kNumStages * SMEM_A_SIZE_PER_STAGE + i * SMEM_B_SIZE_PER_STAGE);
++    });
++    auto barrier_start_ptr = reinterpret_cast<Barrier*>(smem_buffer + SMEM_D_SIZE + kNumStages * (SMEM_A_SIZE_PER_STAGE + SMEM_B_SIZE_PER_STAGE));
++    auto full_barriers = utils::PatternVisitor([&](const uint32_t& i) { return barrier_start_ptr + i; });
++    // Per-stage release counters (warps done reading the stage)
++    auto release_counters = reinterpret_cast<uint32_t*>(barrier_start_ptr + kNumStages);
++
++    if (warp_idx == 1 and cute::elect_one_sync()) {
++        #pragma unroll
++        for (uint32_t i = 0; i < kNumStages; ++ i) {
++            full_barriers[i]->init(1);
++            release_counters[i] = 0;
++        }
++        cutlass::arch::fence_barrier_init();
++    }
++    __syncthreads();
++
++    // PDL: no global reads above this point
++    cudaGridDependencySynchronize();
++
++    // Every warp runs the same deterministic tile sequence
++    auto scheduler = sched::Scheduler<kGemmType, BLOCK_M, BLOCK_N, kNumGroups, kNumTMAMulticast, kIsTMAMulticastOnA, kNumSMs>(shape_m, shape_n, shape_k, nullptr);
++    uint32_t m_block_idx = 0, n_block_idx = 0, next_m_block_idx = 0, next_n_block_idx = 0;
++    bool has_tile = scheduler.get_next_block(m_block_idx, n_block_idx);
++    bool next_valid = false;
++
++    auto issue_load = [&](const uint32_t& s, const uint32_t& m_blk, const uint32_t& n_blk, const uint32_t& k_blk) {
++        auto& full_barrier = *full_barriers[s];
++        // Rows past M are zero-filled by TMA (and still counted in the transaction bytes)
++        tma::copy<BLOCK_K, BLOCK_M, kSwizzleAMode, ab_a_dtype_t>(&tensor_map_a, &full_barrier,
++                 smem_a[s], k_blk * BLOCK_K, m_blk * BLOCK_M, 1, 0);
++        tma::copy<BLOCK_K, BLOCK_N, kSwizzleBMode, ab_b_dtype_t>(&tensor_map_b, &full_barrier,
++                 smem_b[s], k_blk * BLOCK_K, n_blk * BLOCK_N, 1, 0);
++        full_barrier.arrive_and_expect_tx(SMEM_A_SIZE_PER_STAGE + SMEM_B_SIZE_PER_STAGE);
++    };
++
++    // Prologue: fill the pipeline with the first tile's first kNumStages k-blocks
++    DG_STATIC_ASSERT(kNumStages >= 2, "Need at least two stages");
++    if (warp_idx == 0 and lane_idx == 0 and has_tile) {
++        #pragma unroll
++        for (uint32_t s = 0; s < kNumStages; ++ s)
++            if (s < num_total_k_blocks)
++                issue_load(s, m_block_idx, n_block_idx, s);
++    }
++
++    // Release the stage of k-block `k_blk` of the current tile; the last of the
++    // kNumMathWarps warps refills it with the k-block kNumStages steps ahead
++    // (in this tile, or in the next one).
++    auto release_stage = [&](const uint32_t& s, const uint32_t& k_blk) {
++        if (lane_idx == 0) {
++            if (atomicAdd(release_counters + s, 1) == kNumMathWarps - 1) {
++                release_counters[s] = 0;
++                const uint32_t target = k_blk + kNumStages;
++                if (target < num_total_k_blocks)
++                    issue_load(s, m_block_idx, n_block_idx, target);
++                else if (next_valid and target - num_total_k_blocks < num_total_k_blocks)
++                    issue_load(s, next_m_block_idx, next_n_block_idx, target - num_total_k_blocks);
++            }
++        }
++        __syncwarp();
++    };
++
++    const auto math_wg_idx = __shfl_sync(0xffffffff, threadIdx.x / 128, 0);
++    const auto warp_in_wg = warp_idx % 4;
++    auto a_desc = mma::sm90::make_smem_desc(smem_a[0] + math_wg_idx * WGMMA::M * BLOCK_K, 1);
++    auto b_desc = mma::sm90::make_smem_desc(smem_b[0], 1);
++    const uint32_t a_desc_lo = __shfl_sync(0xffffffff, a_desc.reg32_[0], 0);
++    const uint32_t b_desc_lo = __shfl_sync(0xffffffff, b_desc.reg32_[0], 0);
++
++    float accum[WGMMA::kNumAccum];
++    constexpr uint32_t kNumChunks = BLOCK_N / 8;
++    constexpr uint32_t kChunksPerSplit = kNumChunks / kStoreSplits;
++
++    const float output_scale = scale_a[0] * scale_b[0];
++    const float output_scale_d = kFP8Out ? scale_d[0] : 1.0f;
++    // FP8 output: max |accumulator| of this thread (amax_d = max |value|)
++    float amax_thr = 0.0f;
++
++    const bool is_store_leader = warp_in_wg == 0 and lane_idx == 0;
++    const uint32_t named_barrier_idx = 2 + math_wg_idx;
++    uint8_t* wg_staging = smem_d + math_wg_idx * kWGStagingBytes;
++
++    uint32_t stage_idx = 0, phase = 0;
++    while (has_tile) {
++        // Warp-groups entirely past M only keep the stage protocol going
++        const bool wg_valid = m_block_idx * BLOCK_M + math_wg_idx * WGMMA::M < shape_m;
++        // The next tile's indices are needed before the first cross-tile refill
++        // (k-block num_total_k_blocks - kNumStages); fetched at k-block 0.
++        next_valid = scheduler.get_next_block(next_m_block_idx, next_n_block_idx);
++
++        uint32_t prev_stage = 0;
++        #pragma unroll 2
++        for (uint32_t k_block_idx = 0; k_block_idx < num_total_k_blocks; ++ k_block_idx) {
++            const auto a_desc_base_lo = a_desc_lo + stage_idx * (SMEM_A_SIZE_PER_STAGE / 16);
++            const auto b_desc_base_lo = b_desc_lo + stage_idx * (SMEM_B_SIZE_PER_STAGE / 16);
++
++            full_barriers[stage_idx]->wait(phase);
++            if (wg_valid) {
++                #pragma unroll
++                for (uint32_t i = 0; i < WGMMA::kNumAccum; ++ i)
++                    ptx::warpgroup_fence_operand(accum[i]);
++                ptx::warpgroup_arrive();
++                #pragma unroll
++                for (uint32_t k = 0; k < BLOCK_K / WGMMA::K; ++ k) {
++                    a_desc.reg32_[0] = a_desc_base_lo + (k * WGMMA::K) / 16;
++                    b_desc.reg32_[0] = b_desc_base_lo + (k * WGMMA::K) / 16;
++                    WGMMA::wgmma(a_desc, b_desc, accum, k_block_idx > 0 or k > 0);
++                }
++                ptx::warpgroup_commit_batch();
++                #pragma unroll
++                for (uint32_t i = 0; i < WGMMA::kNumAccum; ++ i)
++                    ptx::warpgroup_fence_operand(accum[i]);
++                if (k_block_idx >= 1)
++                    ptx::warpgroup_wait<1>();
++            }
++            // The previous k-block's group has completed: release (and maybe refill) its stage
++            if (k_block_idx >= 1)
++                release_stage(prev_stage, k_block_idx - 1);
++            prev_stage = stage_idx;
++            stage_idx = stage_idx == kNumStages - 1 ? 0 : stage_idx + 1;
++            phase ^= stage_idx == 0;
++        }
++        ptx::warpgroup_wait<0>();
++        release_stage(prev_stage, num_total_k_blocks - 1);
++
++        if (wg_valid) {
++            // Epilogue: registers -> swizzled staging (this warp-group's 64 rows) -> TMA store
++            const uint32_t m_idx = m_block_idx * BLOCK_M + math_wg_idx * WGMMA::M;
++            #pragma unroll
++            for (uint32_t split_idx = 0; split_idx < kStoreSplits; ++ split_idx) {
++                // The previous TMA store from this staging buffer must have finished reading it
++                if (is_store_leader)
++                    cute::tma_store_wait<0>();
++                cutlass::arch::NamedBarrier::sync(128, named_barrier_idx);
++
++                #pragma unroll
++                for (uint32_t c = 0; c < kChunksPerSplit; ++ c) {
++                    const uint32_t i = split_idx * kChunksPerSplit + c;
++                    const uint32_t col = c * 8;
++                    if constexpr (kFP8Out) {
++                        // Pair lanes (L, L ^ 1) exchange one e4m3x2 half each: every lane
++                        // then owns 4 consecutive columns of one row (32-bit stores).
++                        if (c % 2 == 1)
++                            continue;
++                        const float s = output_scale * output_scale_d;
++                        uint32_t p[2];
++                        #pragma unroll
++                        for (uint32_t j = 0; j < 2; ++ j) {
++                            amax_thr = fmaxf(amax_thr, fmaxf(fmaxf(fabsf(accum[(i + j) * 4 + 0]), fabsf(accum[(i + j) * 4 + 1])),
++                                                             fmaxf(fabsf(accum[(i + j) * 4 + 2]), fabsf(accum[(i + j) * 4 + 3]))));
++                            const auto lo = __nv_cvt_float2_to_fp8x2({accum[(i + j) * 4 + 0] * s, accum[(i + j) * 4 + 1] * s}, __NV_SATFINITE, __NV_E4M3);
++                            const auto hi = __nv_cvt_float2_to_fp8x2({accum[(i + j) * 4 + 2] * s, accum[(i + j) * 4 + 3] * s}, __NV_SATFINITE, __NV_E4M3);
++                            p[j] = static_cast<uint32_t>(lo) | (static_cast<uint32_t>(hi) << 16);
++                        }
++                        const bool odd = lane_idx & 1;
++                        const uint32_t send = odd ? __byte_perm(p[0], p[1], 0x5410) : __byte_perm(p[0], p[1], 0x7632);
++                        const uint32_t recv = __shfl_xor_sync(0xffffffff, send, 1);
++                        const uint32_t w0 = odd ? __byte_perm(recv, p[0], 0x7610) : __byte_perm(p[0], recv, 0x5410);
++                        const uint32_t w1 = odd ? __byte_perm(recv, p[1], 0x7632) : __byte_perm(p[1], recv, 0x7610);
++                        const uint32_t row = warp_in_wg * 16 + lane_idx / 4 + (odd ? 8 : 0);
++                        #pragma unroll
++                        for (uint32_t j = 0; j < 2; ++ j) {
++                            const uint32_t col_byte = col + j * 8 + ((lane_idx % 4) / 2) * 4;
++                            const uint32_t atom = col_byte / 128, in_atom = col_byte % 128;
++                            const uint32_t piece = (in_atom / 16) ^ (row % 8);
++                            auto ptr = wg_staging + atom * kAtomBytes + row * 128 + piece * 16 + in_atom % 16;
++                            ptx::st_shared(reinterpret_cast<uint32_t*>(ptr), j == 0 ? w0 : w1);
++                        }
++                    } else {
++                        const auto lo = __float22bfloat162_rn({accum[i * 4 + 0] * output_scale, accum[i * 4 + 1] * output_scale});
++                        const auto hi = __float22bfloat162_rn({accum[i * 4 + 2] * output_scale, accum[i * 4 + 3] * output_scale});
++                        const uint32_t row = warp_in_wg * 16 + lane_idx % 16;
++                        const uint32_t atom = col / kAtomCols;
++                        const uint32_t piece = ((col % kAtomCols) / 8) ^ (row % 8);
++                        auto ptr = wg_staging + atom * kAtomBytes + row * 128 + piece * 16;
++                        ptx::SM90_U32x2_STSM_N<nv_bfloat162>::copy(lo, hi, ptr);
++                    }
++                }
++                cute::tma_store_fence();
++                cutlass::arch::NamedBarrier::sync(128, named_barrier_idx);
++
++                if (is_store_leader) {
++                    #pragma unroll
++                    for (uint32_t atom = 0; atom < kAtomsPerSplit; ++ atom) {
++                        const uint32_t n_idx = n_block_idx * BLOCK_N + split_idx * kSplitCols + atom * kAtomCols;
++                        cute::SM90_TMA_STORE_2D::copy(&tensor_map_d, wg_staging + atom * kAtomBytes, n_idx, m_idx);
++                    }
++                    cute::tma_store_arrive();
++                }
++            }
++        }
++        has_tile = next_valid;
++        m_block_idx = next_m_block_idx, n_block_idx = next_n_block_idx;
++    }
++    if (is_store_leader)
++        cute::tma_store_wait<0>();
++    if constexpr (kFP8Out)
++        reduce_amax(amax_d, amax_thr * output_scale);
++#else
++    if (blockIdx.x == 0 and threadIdx.x == 0)
++        DG_DEVICE_ASSERT(false and "This kernel only support sm_90a");
++#endif
++}
++
++};  // namespace deep_gemm
++
++#pragma clang diagnostic pop
+diff --git a/deep_gemm/include/deep_gemm/impls/sm90_fp8_gemm_per_tensor_legacy.cuh b/deep_gemm/include/deep_gemm/impls/sm90_fp8_gemm_per_tensor_legacy.cuh
+new file mode 100644
+index 0000000..38a17ef
+--- /dev/null
++++ b/deep_gemm/include/deep_gemm/impls/sm90_fp8_gemm_per_tensor_legacy.cuh
+@@ -0,0 +1,418 @@
++// Copyright (c) 2026, Billy Cao
++// Per-tensor-scaled FP8 GEMM, BF16 output: 128 x BLOCK_N tile, producer
++// warp-group + two math warp-groups that store the tile together after its
++// mainloop (named-barrier synchronized epilogue, swizzled staging -> TMA).
++#pragma once
++
++#include <deep_gemm/impls/sm90_fp8_gemm_per_tensor.cuh>
++
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wunknown-attributes"
++
++namespace deep_gemm {
++
++template <typename ab_a_dtype_t, typename ab_b_dtype_t,
++          uint32_t SHAPE_M, uint32_t SHAPE_N, uint32_t SHAPE_K,
++          uint32_t kNumGroups,
++          uint32_t BLOCK_M, uint32_t BLOCK_N, uint32_t BLOCK_K,
++          uint32_t kSwizzleAMode, uint32_t kSwizzleBMode, uint32_t kSwizzleDMode,
++          uint32_t kNumStages,
++          uint32_t kNumTMAThreads, uint32_t kNumMathThreads,
++          uint32_t kNumTMAMulticast, bool kIsTMAMulticastOnA,
++          uint32_t kNumSMs, GemmType kGemmType,
++          typename cd_dtype_t, uint32_t kDStoreSplits = 1, bool kWithC = false,
++          bool kWithC2 = false,
++          bool kWaitC = false>
++CUTLASS_GLOBAL __launch_bounds__(kNumTMAThreads + kNumMathThreads, 1) void
++sm90_fp8_gemm_per_tensor_legacy_impl(const float* scale_a, const float* scale_b, const float* scale_d,
++                                     float* amax_d,
++                              int* grouped_layout,
++                              uint32_t shape_m, uint32_t shape_n, uint32_t shape_k,
++                              const __grid_constant__ cute::TmaDescriptor tensor_map_a,
++                              const __grid_constant__ cute::TmaDescriptor tensor_map_b,
++                              const __grid_constant__ cute::TmaDescriptor tensor_map_d,
++                              const __nv_bfloat16* __restrict__ c_ptr, uint32_t ldc,
++                              const __nv_bfloat16* __restrict__ c2_ptr = nullptr,
++                              const uint32_t* __restrict__ c2_flags = nullptr,
++                              uint32_t c2_piece_rows = 0, uint32_t c2_piece_cols = 0) {
++#if (defined(__CUDA_ARCH__) and (__CUDA_ARCH__ >= 900)) or defined(__CLION_IDE__)
++    DG_STATIC_ASSERT(cute::is_same_v<cd_dtype_t, cutlass::bfloat16_t>, "BF16 output only");
++    DG_STATIC_ASSERT(kNumTMAMulticast == 1, "Cluster-1 only");
++    DG_STATIC_ASSERT(kWithC or not kWithC2, "The second addend rides the C addend path");
++    DG_STATIC_ASSERT(not kWaitC or (kWithC and not kWithC2), "kWaitC: the flags guard a single C addend");
++    DG_STATIC_ASSERT((cute::is_same_v<ab_a_dtype_t, cutlass::float_e4m3_t> or
++                      cute::is_same_v<ab_a_dtype_t, cutlass::float_e5m2_t>) and
++                     (cute::is_same_v<ab_b_dtype_t, cutlass::float_e4m3_t> or
++                      cute::is_same_v<ab_b_dtype_t, cutlass::float_e5m2_t>), "Invalid A/B data dtype");
++    DG_STATIC_ASSERT(kGemmType == GemmType::Normal, "Per-tensor kernel only supports normal GEMM");
++
++    // Types
++    using WGMMA = typename PerTensorMMASelector<BLOCK_N, ab_a_dtype_t, ab_b_dtype_t>::type;
++    using Barrier = cutlass::arch::ClusterTransactionBarrier;
++    DG_STATIC_ASSERT(BLOCK_M % WGMMA::M == 0 or BLOCK_M < WGMMA::M, "Invalid block size");
++
++    // PDL (launched with enable_pdl): wait for the upstream grid before any
++    // global read (A/B TMA loads, scale_a/scale_b dereferences).
++    asm volatile("griddepcontrol.wait;" ::: "memory");
++
++    // Overwrite shape constants if the compiler gives
++    shape_m = SHAPE_M != 0 ? SHAPE_M : shape_m;
++    shape_n = SHAPE_N != 0 ? SHAPE_N : shape_n;
++    shape_k = SHAPE_K != 0 ? SHAPE_K : shape_k;
++
++    // Shared memory. The D staging buffer holds BLOCK_N / kDStoreSplits
++    // columns at a time (the epilogue stores the tile in kDStoreSplits
++    // sequential column splits).
++    static constexpr uint32_t BLOCK_N_PER_SPLIT = BLOCK_N / kDStoreSplits;
++    static constexpr uint32_t SMEM_D_SIZE = math::constexpr_align(BLOCK_M * BLOCK_N_PER_SPLIT * static_cast<uint32_t>(sizeof(__nv_bfloat16)), 1024u);
++    static constexpr uint32_t SMEM_A_SIZE_PER_STAGE = BLOCK_M * BLOCK_K * sizeof(ab_a_dtype_t);
++    static constexpr uint32_t SMEM_B_SIZE_PER_STAGE = BLOCK_N * BLOCK_K * sizeof(ab_b_dtype_t);
++
++    // NOTES: Make sure we have enough shared memory for WGMMA padding
++    static constexpr uint32_t WGMMA_A_SIZE_PER_STAGE = WGMMA::M * BLOCK_K * sizeof(ab_a_dtype_t);
++    DG_STATIC_ASSERT(WGMMA_A_SIZE_PER_STAGE <= SMEM_A_SIZE_PER_STAGE + SMEM_B_SIZE_PER_STAGE * kNumStages, "Memory Out of bound for WGMMA");
++
++    // Configs
++    const uint32_t num_total_k_blocks = math::ceil_div(shape_k, BLOCK_K);
++    const uint32_t warp_idx = __shfl_sync(0xffffffff, threadIdx.x / 32, 0);
++    const uint32_t lane_idx = ptx::get_lane_idx();
++
++    // Prefetch TMA descriptors at the very beginning
++    if (warp_idx == kNumMathThreads / 32 and cute::elect_one_sync()) {
++        cute::prefetch_tma_descriptor(&tensor_map_a);
++        cute::prefetch_tma_descriptor(&tensor_map_b);
++        cute::prefetch_tma_descriptor(&tensor_map_d);
++    }
++    __syncwarp();
++
++    // Align to 1024 bytes for swizzle-128B
++    extern __shared__ __align__(1024) uint8_t smem_buffer[];
++    DG_STATIC_ASSERT(SMEM_D_SIZE % 1024 == 0, "Shared memory of A/B must be aligned to 1024 bytes");
++
++    // Data on shared memory
++    auto smem_d = reinterpret_cast<__nv_bfloat16*>(smem_buffer);
++    auto smem_a = utils::PatternVisitor([&](const uint32_t& i) {
++        return reinterpret_cast<ab_a_dtype_t*>(smem_buffer + SMEM_D_SIZE + i * SMEM_A_SIZE_PER_STAGE);
++    });
++    auto smem_b = utils::PatternVisitor([&](const uint32_t& i) {
++        return reinterpret_cast<ab_b_dtype_t*>(smem_buffer + SMEM_D_SIZE + kNumStages * SMEM_A_SIZE_PER_STAGE + i * SMEM_B_SIZE_PER_STAGE);
++    });
++
++    // Fill barriers
++    auto barrier_start_ptr = reinterpret_cast<Barrier*>(smem_buffer + SMEM_D_SIZE + kNumStages * (SMEM_A_SIZE_PER_STAGE + SMEM_B_SIZE_PER_STAGE));
++    auto full_barriers     = utils::PatternVisitor([&](const uint32_t& i) { return barrier_start_ptr + i; });
++    auto empty_barriers    = utils::PatternVisitor([&](const uint32_t& i) { return barrier_start_ptr + kNumStages + i; });
++
++    // Initialize barriers
++    if (warp_idx == kNumMathThreads / 32 + 1 and cute::elect_one_sync()) {
++        #pragma unroll
++        for (uint32_t i = 0; i < kNumStages; ++ i) {
++            full_barriers[i]->init(1);
++            empty_barriers[i]->init(kNumMathThreads / 32);
++        }
++        // Make initialized barrier visible in async proxy
++        cutlass::arch::fence_barrier_init();
++    }
++
++    // Synchronize all threads to make barrier visible in normal memory model
++    __syncthreads();
++
++    // Register reconfigurations
++    constexpr uint32_t kNumTMARegisters = 40;
++    constexpr uint32_t kNumMathRegisters = kNumMathThreads == 128 ? 248 : 232;
++
++    // Wait for primary kernel completion
++    cudaGridDependencySynchronize();
++
++    // Block scheduler
++    uint32_t m_block_idx, n_block_idx;
++    auto scheduler = sched::Scheduler<kGemmType, BLOCK_M, BLOCK_N, kNumGroups, kNumTMAMulticast, kIsTMAMulticastOnA, kNumSMs>(shape_m, shape_n, shape_k, grouped_layout);
++
++    // Pipeline and TMA phases
++    uint32_t stage_idx = 0, phase = 0;
++    auto advance_pipeline = [&](uint32_t& k_block_idx) {
++        ++ k_block_idx;
++        // Flip phases only if reach the next first stage
++        stage_idx = stage_idx == kNumStages - 1 ? 0 : stage_idx + 1;
++        phase ^= stage_idx == 0;
++    };
++
++    if (warp_idx >= kNumMathThreads / 32) {
++        // TMA warp-group for loading data
++        cutlass::arch::warpgroup_reg_dealloc<kNumTMARegisters>();
++
++        // NOTES: only one thread (or warp) will be used
++        if (warp_idx == kNumMathThreads / 32 + 2 and cute::elect_one_sync()) {
++            // Persistently schedule over blocks
++            while (scheduler.get_next_block(m_block_idx, n_block_idx)) {
++                for (uint32_t k_block_idx = 0; k_block_idx < num_total_k_blocks; advance_pipeline(k_block_idx)) {
++                    // Wait consumer release
++                    empty_barriers[stage_idx]->wait(phase ^ 1);
++
++                    // Issue TMA A
++                    auto& full_barrier = *full_barriers[stage_idx];
++                    const uint32_t k_idx = k_block_idx * BLOCK_K;
++                    tma::copy<BLOCK_K, BLOCK_M, kSwizzleAMode, ab_a_dtype_t>(&tensor_map_a, &full_barrier,
++                             smem_a[stage_idx], k_idx, scheduler.get_global_idx<false>(shape_m, BLOCK_M, m_block_idx),
++                             1, 0);
++
++                    // Issue TMA B
++                    tma::copy<BLOCK_K, BLOCK_N, kSwizzleBMode, ab_b_dtype_t>(&tensor_map_b, &full_barrier,
++                             smem_b[stage_idx], k_idx, scheduler.get_global_idx<true>(shape_n, BLOCK_N, n_block_idx, m_block_idx),
++                             1, 0);
++                    full_barrier.arrive_and_expect_tx(SMEM_A_SIZE_PER_STAGE + SMEM_B_SIZE_PER_STAGE);
++                }
++            }
++        }
++    } else {
++        // Math warp-groups for WGMMA
++        cutlass::arch::warpgroup_reg_alloc<kNumMathRegisters>();
++
++        // NOTES: use `__shfl_sync` to encourage NVCC to use unified registers
++        const auto math_wg_idx = __shfl_sync(0xffffffff, threadIdx.x / 128, 0);
++        const auto r_0 = warp_idx * 16 + lane_idx / 4, r_1 = r_0 + 8;
++
++        auto a_desc = mma::sm90::make_smem_desc(smem_a[0] + math_wg_idx * WGMMA::M * BLOCK_K, 1);
++        auto b_desc = mma::sm90::make_smem_desc(smem_b[0], 1);
++        const uint32_t a_desc_lo = __shfl_sync(0xffffffff, a_desc.reg32_[0], 0);
++        const uint32_t b_desc_lo = __shfl_sync(0xffffffff, b_desc.reg32_[0], 0);
++
++        // Accumulation for WGMMA (a single accumulator set, reused across all k-blocks)
++        constexpr uint32_t WAVE_BLOCK_M = BLOCK_M <= WGMMA::M ? BLOCK_M : WGMMA::M * 2;
++        DG_STATIC_ASSERT(BLOCK_M % WAVE_BLOCK_M == 0, "Invalid block sizes");
++        float accum[WGMMA::kNumAccum * (BLOCK_M / WAVE_BLOCK_M)] = {0};
++
++        // Pick threads whose WGMMA results are to be stored in shared memory
++        DG_STATIC_ASSERT(BLOCK_M >= 64 or kNumMathThreads == 128, "Only one math warp group for `BLOCK_M < 64`");
++        constexpr uint32_t kNumWGMMAStoreThreads = WAVE_BLOCK_M * (128 / WGMMA::M);
++        const bool do_wgmma_store = BLOCK_M >= WGMMA::M or warp_idx < kNumWGMMAStoreThreads / 32;
++
++        // Empty barrier arrival for a given stage
++        auto empty_barrier_arrive_at = [&](const uint32_t& s) {
++            lane_idx == 0 ? empty_barriers[s]->arrive() : void();
++        };
++
++        // Per-tensor scales (dequant multipliers)
++        const float output_scale = scale_a[0] * scale_b[0];
++
++        // Persistently schedule over blocks
++        while (scheduler.get_next_block(m_block_idx, n_block_idx)) {
++            // Skip useless computations (always valid for normal GEMM)
++            if (scheduler.is_computation_valid(m_block_idx, math_wg_idx * WGMMA::M)) {
++                #pragma unroll 4
++                for (uint32_t k_block_idx = 0; k_block_idx < num_total_k_blocks; advance_pipeline(k_block_idx)) {
++                    const auto a_desc_base_lo = a_desc_lo + stage_idx * (SMEM_A_SIZE_PER_STAGE / 16);
++                    const auto b_desc_base_lo = b_desc_lo + stage_idx * (SMEM_B_SIZE_PER_STAGE / 16);
++                    const uint32_t prev_stage = stage_idx == 0 ? kNumStages - 1 : stage_idx - 1;
++
++                    // Wait TMA arrivals
++                    full_barriers[stage_idx]->wait(phase);
++
++                    // Commit WGMMA instructions: ONE group per k-block, covering all M waves.
++                    // The accumulator persists across k-blocks (scale_d = One except the very first).
++                    #pragma unroll
++                    for (uint32_t i = 0; i < WGMMA::kNumAccum * (BLOCK_M / WAVE_BLOCK_M); ++ i)
++                        ptx::warpgroup_fence_operand(accum[i]);
++                    ptx::warpgroup_arrive();
++                    #pragma unroll
++                    for (uint32_t local_idx = 0; local_idx < BLOCK_M / WAVE_BLOCK_M; ++ local_idx) {
++                        auto m_offset = local_idx * WAVE_BLOCK_M;
++                        auto shifted_accum = accum + WGMMA::kNumAccum * local_idx;
++                        #pragma unroll
++                        for (uint32_t k = 0; k < BLOCK_K / WGMMA::K; ++ k) {
++                            a_desc.reg32_[0] = a_desc_base_lo + (m_offset * BLOCK_K + k * WGMMA::K) / 16;
++                            b_desc.reg32_[0] = b_desc_base_lo + k * WGMMA::K / 16;
++                            // Scale-D zero only on the very first WGMMA writing each
++                            // accumulator slot (tile boundary); every other WGMMA
++                            // accumulates onto the previous k-blocks' partial sums.
++                            WGMMA::wgmma(a_desc, b_desc, shifted_accum, k_block_idx > 0 or k > 0);
++                        }
++                    }
++                    ptx::warpgroup_commit_batch();
++                    #pragma unroll
++                    for (uint32_t i = 0; i < WGMMA::kNumAccum * (BLOCK_M / WAVE_BLOCK_M); ++ i)
++                        ptx::warpgroup_fence_operand(accum[i]);
++
++                    // Pipeline the stage release: the previous k-block's WGMMA group has
++                    // completed, so its smem stage can be handed back to the TMA warp.
++                    if (k_block_idx >= 1)
++                        ptx::warpgroup_wait<1>(), empty_barrier_arrive_at(prev_stage);
++                }
++                // Drain the last WGMMA group and release its stage
++                ptx::warpgroup_wait<0>();
++                empty_barrier_arrive_at(stage_idx == 0 ? kNumStages - 1 : stage_idx - 1);
++            } else {
++                #pragma unroll 4
++                for (uint32_t k_block_idx = 0; k_block_idx < num_total_k_blocks; advance_pipeline(k_block_idx)) {
++                    full_barriers[stage_idx]->wait(phase);
++                    empty_barrier_arrive_at(stage_idx);
++                }
++            }
++
++            // TMA checks
++            constexpr uint32_t kNumElemBytes = sizeof(nv_bfloat16);
++            constexpr uint32_t TMA_D_BLOCK_N = kSwizzleDMode == 0 ? BLOCK_N_PER_SPLIT : (kSwizzleDMode / kNumElemBytes);
++            constexpr uint32_t WGMMA_M_PER_WARP = WGMMA::M / 4;
++            constexpr uint32_t TMA_D_ATOMS_PER_SPLIT = BLOCK_N_PER_SPLIT / TMA_D_BLOCK_N;
++            constexpr uint32_t ACCUM_CHUNKS_PER_SPLIT = (WGMMA::kNumAccum / 4) / kDStoreSplits;
++            DG_STATIC_ASSERT(BLOCK_M % 8 == 0, "Invalid swizzling atom");
++            DG_STATIC_ASSERT(BLOCK_N % TMA_D_BLOCK_N == 0 and BLOCK_N / TMA_D_BLOCK_N <= 32,
++                            "Unaligned TMA store or too many TMA store instructions");
++            DG_STATIC_ASSERT(TMA_D_BLOCK_N % 8 == 0, "Invalid TMA block N");
++            DG_STATIC_ASSERT(BLOCK_N % kDStoreSplits == 0 and (WGMMA::kNumAccum / 4) % kDStoreSplits == 0,
++                            "Invalid D store split");
++            DG_STATIC_ASSERT(kNumWGMMAStoreThreads >= TMA_D_ATOMS_PER_SPLIT, "Too many TMA blocks");
++
++            // Skip WGMMA store for the unfilled parts
++            if (not do_wgmma_store)
++                continue;
++
++            constexpr bool kWithGroupOffsetD = false;
++            const auto m_idx = scheduler.get_global_idx<kWithGroupOffsetD>(shape_m, BLOCK_M, m_block_idx);
++
++            // Wait last TMA store to be finished
++            if (threadIdx.x < TMA_D_ATOMS_PER_SPLIT)
++                cute::tma_store_wait<0>();
++            cutlass::arch::NamedBarrier::sync(kNumWGMMAStoreThreads, 1);
++
++            // Write back to shared memory using STSM and issue TMA stores,
++            // in kDStoreSplits sequential halves (each half reuses the same
++            // reduced-size D staging buffer, freeing smem for A/B stages).
++            DG_STATIC_ASSERT(WGMMA::kNumAccum % 4 == 0, "Invalid STSM x2 vectorization");
++            #pragma unroll
++            for (uint32_t split_idx = 0; split_idx < kDStoreSplits; ++ split_idx) {
++                if (split_idx >= 1) {
++                    // The previous split's TMA store must complete before its
++                    // smem half is overwritten by this split
++                    if (threadIdx.x < TMA_D_ATOMS_PER_SPLIT)
++                        cute::tma_store_wait<0>();
++                    cutlass::arch::NamedBarrier::sync(kNumWGMMAStoreThreads, 1);
++                }
++                #pragma unroll
++                for (uint32_t local_idx = 0; local_idx < BLOCK_M / WAVE_BLOCK_M; ++ local_idx) {
++                    auto m_offset = local_idx * WAVE_BLOCK_M;
++                    auto shifted_accum = accum + WGMMA::kNumAccum * local_idx;
++                    #pragma unroll
++                    for (auto i = 0; i < ACCUM_CHUNKS_PER_SPLIT; ++ i) {
++                        const auto global_i = split_idx * ACCUM_CHUNKS_PER_SPLIT + i;
++                        // Swizzle or padding into the correct address
++                        uint8_t* smem_ptr = nullptr;
++                        if constexpr (kSwizzleDMode > 0) {
++                            // Calculate the swizzling atom offset and in-atom offset
++                            constexpr uint32_t kNumBankGroupBytes = 16;
++                            auto atom_offset = i / (TMA_D_BLOCK_N / 8), in_atom_offset = i % (TMA_D_BLOCK_N / 8);
++
++                            // Calculate the index of the bank group to be written in the atom
++                            auto bank_group_index = in_atom_offset + lane_idx * (kSwizzleDMode / kNumBankGroupBytes);
++
++                            // Reshape the atom in another view and swizzle
++                            constexpr bool kHasShortcut = (kSwizzleDMode / kNumBankGroupBytes) == 8;
++                            auto row = kHasShortcut ? (in_atom_offset / 8 + lane_idx) : (bank_group_index / 8);
++                            auto col = kHasShortcut ? (in_atom_offset) : (bank_group_index % 8);
++                            col ^= row % (kSwizzleDMode / 16);
++
++                            // Add back into the base pointer
++                            smem_ptr = reinterpret_cast<uint8_t*>(smem_d) +                // Base pointer
++                                warp_idx * (WGMMA_M_PER_WARP * kSwizzleDMode) +            // Warp offset
++                                m_offset * kSwizzleDMode +                                 // Wave offset
++                                atom_offset * BLOCK_M * kSwizzleDMode +                    // Swizzle atom offset (constants)
++                                row * (kNumBankGroupBytes * 8) + col * kNumBankGroupBytes; // In-atom offset
++                        } else {
++                            // No swizzling, just padding
++                            smem_ptr = reinterpret_cast<uint8_t*>(smem_d + (m_offset + warp_idx * WGMMA_M_PER_WARP + lane_idx) * BLOCK_N_PER_SPLIT + i * 8);
++                        }
++
++                        // NOTES: only 16 lanes' addresses are used
++                        // Apply the per-tensor dequant scale in the epilogue (single multiply)
++                        ptx::SM90_U32x2_STSM_N<nv_bfloat162>::copy(
++                            __float22bfloat162_rn({shifted_accum[global_i * 4 + 0] * output_scale, shifted_accum[global_i * 4 + 1] * output_scale}),
++                            __float22bfloat162_rn({shifted_accum[global_i * 4 + 2] * output_scale, shifted_accum[global_i * 4 + 3] * output_scale}),
++                            smem_ptr
++                        );
++                    }
++                }
++                if constexpr (kWithC) {
++                    // D = bf16(scale * acc) + C as a BF16 add (the value a separate
++                    // element-wise join after the GEMM gives). The staged split is
++                    // complete in shared memory; consecutive threads add consecutive
++                    // 16-byte C vectors of a row (coalesced global reads) into their
++                    // staged location.
++                    if constexpr (kWithC2 or kWaitC) {
++                        // Staged addend (UB_TCCL_EPI=2; C2, or C itself with kWaitC): a local copy the copy engine fills
++                        // piece by piece (c2_piece_rows x c2_piece_cols, row-major piece order), each piece followed by a
++                        // non-zero flag. One thread waits for this split's piece; the barrier below releases the rest.
++                        if (c2_flags != nullptr and threadIdx.x == 0) {
++                            const uint32_t pieces_per_row = (shape_n + c2_piece_cols - 1) / c2_piece_cols;
++                            const uint32_t piece = m_idx / c2_piece_rows * pieces_per_row +
++                                (n_block_idx * BLOCK_N + split_idx * BLOCK_N_PER_SPLIT) / c2_piece_cols;
++                            uint32_t ready = 0;
++                            do {
++                                asm volatile("ld.acquire.gpu.global.b32 %0, [%1];" : "=r"(ready) : "l"(c2_flags + piece) : "memory");
++                            } while (ready == 0);
++                        }
++                    }
++                    cutlass::arch::NamedBarrier::sync(kNumWGMMAStoreThreads, 1);
++                    constexpr uint32_t kVecsPerRow = BLOCK_N_PER_SPLIT / 8;
++                    constexpr uint32_t kNumVecs = BLOCK_M * kVecsPerRow;
++                    DG_STATIC_ASSERT(kNumVecs % kNumWGMMAStoreThreads == 0, "Invalid addend split");
++                    const uint32_t n_base = n_block_idx * BLOCK_N + split_idx * BLOCK_N_PER_SPLIT;
++                    #pragma unroll 4
++                    for (uint32_t v = threadIdx.x; v < kNumVecs; v += kNumWGMMAStoreThreads) {
++                        const uint32_t r = v / kVecsPerRow, j = v % kVecsPerRow;
++                        const auto* c_vec = reinterpret_cast<const uint4*>(
++                            c_ptr + static_cast<size_t>(m_idx + r) * ldc + n_base + j * 8);
++                        // kWaitC: C is written by the copy engine during this kernel, so read it through L2
++                        const auto c = kWaitC ? __ldcg(c_vec) : __ldg(c_vec);
++                        uint8_t* staged;
++                        if constexpr (kSwizzleDMode > 0) {
++                            // 128B atoms of TMA_D_BLOCK_N columns x BLOCK_M rows; the
++                            // 16-byte chunk index is XOR-swizzled with the row
++                            constexpr uint32_t kChunksPerAtom = kSwizzleDMode / 16;
++                            const uint32_t atom = j / kChunksPerAtom, chunk = j % kChunksPerAtom;
++                            staged = reinterpret_cast<uint8_t*>(smem_d) + atom * BLOCK_M * kSwizzleDMode +
++                                     r * kSwizzleDMode + ((chunk ^ (r % kChunksPerAtom)) * 16);
++                        } else {
++                            staged = reinterpret_cast<uint8_t*>(smem_d + r * BLOCK_N_PER_SPLIT + j * 8);
++                        }
++                        uint4 d = *reinterpret_cast<uint4*>(staged);
++                        auto* dh = reinterpret_cast<__nv_bfloat162*>(&d);
++                        const auto* ch = reinterpret_cast<const __nv_bfloat162*>(&c);
++                        #pragma unroll
++                        for (int q = 0; q < 4; ++ q) dh[q] = __hadd2(dh[q], ch[q]);
++                        if constexpr (kWithC2) {
++                            // Second addend (UB_TCCL, the peer's partial of this shard read through its IPC
++                            // mapping): a second BF16 add after the first, i.e. the rounding sequence of
++                            // "fold C, then add the peer's partial" that the ring's local reduce gives.
++                            const auto c2 = __ldcg(reinterpret_cast<const uint4*>(
++                                c2_ptr + static_cast<size_t>(m_idx + r) * ldc + n_base + j * 8));
++                            const auto* c2h = reinterpret_cast<const __nv_bfloat162*>(&c2);
++                            #pragma unroll
++                            for (int q = 0; q < 4; ++ q) dh[q] = __hadd2(dh[q], c2h[q]);
++                        }
++                        *reinterpret_cast<uint4*>(staged) = d;
++                    }
++                }
++                cute::tma_store_fence();
++                cutlass::arch::NamedBarrier::sync(kNumWGMMAStoreThreads, 1);
++
++                // Use TMA store to write this split back to global memory
++                if (threadIdx.x < TMA_D_ATOMS_PER_SPLIT) {
++                    auto in_block_n_offset = threadIdx.x * TMA_D_BLOCK_N;
++                    auto smem_ptr = smem_d + in_block_n_offset * BLOCK_M;
++                    auto n_idx = n_block_idx * BLOCK_N + split_idx * BLOCK_N_PER_SPLIT + in_block_n_offset;
++                    cute::SM90_TMA_STORE_2D::copy(&tensor_map_d, smem_ptr, n_idx, m_idx);
++                    cute::tma_store_arrive();
++                }
++                __syncwarp();
++            }
++        }
++    }
++#else
++    if (blockIdx.x == 0 and threadIdx.x == 0)
++        DG_DEVICE_ASSERT(false and "This kernel only support sm_90a");
++#endif
++}
++
++};  // namespace deep_gemm
++
++#pragma clang diagnostic pop

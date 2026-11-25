@@ -1,0 +1,19 @@
+--- a/src/train.py
++++ b/src/train.py
+@@ -13,6 +13,16 @@
+ 
+ import os
+ 
++# Keep this rank on the CPU cores of the NUMA node its GPU is attached to
++# RANK_NUMA lists one NUMA node per rank and leaving it unset changes nothing
++if os.getenv("RANK_NUMA") and os.getenv("LOCAL_RANK"):
++    node = os.environ["RANK_NUMA"].split()[int(os.environ["LOCAL_RANK"])]
++    cores = set()
++    for part in open(f"/sys/devices/system/node/node{node}/cpulist").read().strip().split(","):
++        first, last = part.split("-")
++        cores.update(range(int(first), int(last) + 1))
++    os.sched_setaffinity(0, cores)
++
+ # set this to WARNING or DEBUG to see debug info or warnings
+ TRAIN_LOG_LEVEL = str(os.getenv("TRAIN_LOG_LEVEL", "ERROR"))
+ 

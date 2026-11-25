@@ -1,0 +1,135 @@
+diff --git a/transformer_engine/pytorch/module/base.py b/transformer_engine/pytorch/module/base.py
+--- a/transformer_engine/pytorch/module/base.py
++++ b/transformer_engine/pytorch/module/base.py
+@@ -83,6 +83,7 @@
+ _2X_ACC_FPROP = False
+ _2X_ACC_DGRAD = True
+ _2X_ACC_WGRAD = True
++_FP8_TRANSIENT_TRANSPOSE = os.getenv("FP8_TRANSIENT_TRANSPOSE", "0") == "1"
+ _dummy_wgrads = {}
+ _ub_communicators = None
+ _ub_initialized = False
+@@ -1845,7 +1846,18 @@
+                 quantizer = self.quantizers["scaling_fwd"][fp8_meta_index]
+                 if quantizer is None:
+                     raise RuntimeError("Weight quantizer has not been initialized")
+-                quantizer.set_usage(rowwise=True, columnwise=torch.is_grad_enabled())
++                quantizer.set_usage(
++                    rowwise=True,
++                    columnwise=(
++                        torch.is_grad_enabled()
++                        and not (
++                            _FP8_TRANSIENT_TRANSPOSE
++                            and isinstance(
++                                quantizer, (Float8Quantizer, Float8CurrentScalingQuantizer)
++                            )
++                        )
++                    ),
++                )
+                 quantizer.internal = False
+                 # HybridQuantizer is included so its current-scaling / NVFP4
+                 # sub-quantizers get the same cross-shard amax reduction as the
+diff --git a/transformer_engine/pytorch/ops/basic/basic_linear.py b/transformer_engine/pytorch/ops/basic/basic_linear.py
+--- a/transformer_engine/pytorch/ops/basic/basic_linear.py
++++ b/transformer_engine/pytorch/ops/basic/basic_linear.py
+@@ -24,10 +24,11 @@
+     _2X_ACC_FPROP,
+     _2X_ACC_DGRAD,
+     _2X_ACC_WGRAD,
++    _FP8_TRANSIENT_TRANSPOSE,
+ )
+ from ...module._common import set_quantizer_amax_reduction_group
+ from ...tensor import Quantizer
+-from ...tensor.float8_tensor import Float8Quantizer
++from ...tensor.float8_tensor import Float8CurrentScalingQuantizer, Float8Quantizer
+ from ...tensor.storage.float8_tensor_storage import Float8TensorStorage
+ from ...utils import (
+     canonicalize_device,
+@@ -355,7 +356,13 @@
+                 )
+             quantizer.set_usage(
+                 rowwise=True,
+-                columnwise=torch.is_grad_enabled(),
++                columnwise=(
++                    torch.is_grad_enabled()
++                    and not (
++                        _FP8_TRANSIENT_TRANSPOSE
++                        and isinstance(quantizer, (Float8Quantizer, Float8CurrentScalingQuantizer))
++                    )
++                ),
+             )
+             quantizer.internal = False
+             with torch.no_grad():
+@@ -883,8 +890,16 @@
+             if weight is None:
+                 raise ValueError("Weight tensor is required to compute input grad")
+             w = weight
++            drop_w_transpose = False
+             if with_quantized_compute:
+                 if is_quantized_tensor(w):
++                    drop_w_transpose = (
++                        _FP8_TRANSIENT_TRANSPOSE
++                        and isinstance(w, torch.nn.Parameter)
++                        and isinstance(w, Float8TensorStorage)
++                        and w._data is not None
++                        and not w.get_usages()["columnwise"]
++                    )
+                     w.update_usage(columnwise_usage=True)
+                 else:
+                     if weight_quantizer is None:
+@@ -957,6 +972,8 @@
+                 use_split_accumulator=_2X_ACC_DGRAD,
+                 grad=True,
+             )
++            if drop_w_transpose:
++                w.update_usage(columnwise_usage=False)
+ 
+             # Reduce tensor-parallel grad input if needed
+             if tensor_parallel_mode == "column":
+diff --git a/transformer_engine/pytorch/ops/fused/userbuffers_backward_linear.py b/transformer_engine/pytorch/ops/fused/userbuffers_backward_linear.py
+--- a/transformer_engine/pytorch/ops/fused/userbuffers_backward_linear.py
++++ b/transformer_engine/pytorch/ops/fused/userbuffers_backward_linear.py
+@@ -16,12 +16,14 @@
+ from ...module.base import (
+     _2X_ACC_DGRAD,
+     _2X_ACC_WGRAD,
++    _FP8_TRANSIENT_TRANSPOSE,
+     fill_userbuffers_buffer_for_all_gather,
+     get_ub,
+     using_cublasmp_backend,
+ )
+ from ...quantized_tensor import Quantizer
+ from ...tensor.mxfp8_tensor import MXFP8Quantizer
++from ...tensor.storage.float8_tensor_storage import Float8TensorStorage
+ from ...utils import canonicalize_device, canonicalize_dtype, clear_tensor_data
+ from ..basic import BasicLinear, Bias, ReduceScatter
+ from .._common import (
+@@ -320,10 +322,18 @@
+         if weight is None:
+             raise ValueError("Weight tensor is required to compute input grad")
+         w = weight
++        drop_w_transpose = False
+         if with_quantized_compute:
+             if not is_quantized_tensor(w):
+                 weight_quantizer.set_usage(columnwise=True)
+                 w = weight_quantizer(w)
++            elif _FP8_TRANSIENT_TRANSPOSE and isinstance(w, Float8TensorStorage):
++                drop_w_transpose = (
++                    isinstance(w, torch.nn.Parameter)
++                    and w._data is not None
++                    and not w.get_usages()["columnwise"]
++                )
++                w.update_usage(columnwise_usage=True)
+         else:
+             w = maybe_dequantize(w, dtype)
+ 
+@@ -449,6 +459,9 @@
+             if is_cublasmp or not (with_dgrad_reduce_scatter_dx or with_wgrad_reduce_scatter_dx):
+                 dx_local = dx
+ 
++            if drop_w_transpose:
++                w.update_usage(columnwise_usage=False)
++
+         # wgrad GEMM
+         dw = None
+         if weight_requires_grad:

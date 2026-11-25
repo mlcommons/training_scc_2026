@@ -1,0 +1,22 @@
+Bootstrap: localimage
+From: amd-mlperf_llama2_70b_training_6.0.sif
+
+%files
+    code/patches /opt/mi300x_patches
+
+%post
+    ls -l /opt/mi300x_patches
+    git config --global --add safe.directory '*'
+    cd /workspace/TransformerEngine
+    git apply /opt/mi300x_patches/scc26-te_mi300x_no_fp8_weight_transpose_cache.patch
+    printf '#!/bin/bash\nexit 0\n' > /workspace/Primus/runner/helpers/hooks/train/posttrain/megatron_bridge/00_install_requirements.sh    
+    cd /workspace/Primus/third_party/Megatron-Bridge/3rdparty/Megatron-LM
+    git apply /opt/mi300x_patches/scc26-megatron_lm_mi300x_fp8_direct_load.patch
+    cd /workspace/Primus
+    git apply /opt/mi300x_patches/scc26-primus_recipe_mi300x_fp8_swiglu_store.patch
+    rm -rf /opt/mi300x_patches
+    /opt/venv/bin/pip install --no-deps "datasets==3.6.0" "pyarrow==21.0.0"
+    /opt/venv/bin/python -m pip uninstall -y nvidia-modelopt
+    /opt/venv/bin/python -m pip install --no-deps "nvidia-modelopt==0.47.0" "Deprecated==3.0.0" "httpcore2==2.13.1" "httptools==0.8.0" "httpx2==2.13.1" "limits==5.8.0" "slowapi==0.1.10" "truststore==0.10.4" "uvloop==0.23.0" "watchfiles==1.3.0"
+
+

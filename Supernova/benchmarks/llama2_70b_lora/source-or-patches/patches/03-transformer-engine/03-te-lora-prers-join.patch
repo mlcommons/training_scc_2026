@@ -1,0 +1,588 @@
+diff --git a/transformer_engine/common/CMakeLists.txt b/transformer_engine/common/CMakeLists.txt
+--- a/transformer_engine/common/CMakeLists.txt
++++ b/transformer_engine/common/CMakeLists.txt
+@@ -221,6 +221,7 @@
+ 
+ list(APPEND transformer_engine_cuda_sources
+      common.cu
++     comm_gemm_overlap/pre_rs_add.cu
+      multi_tensor/adam.cu
+      multi_tensor/l2norm.cu
+      multi_tensor/scale.cu
+diff --git a/transformer_engine/common/comm_gemm_overlap/comm_gemm_overlap.cpp b/transformer_engine/common/comm_gemm_overlap/comm_gemm_overlap.cpp
+--- a/transformer_engine/common/comm_gemm_overlap/comm_gemm_overlap.cpp
++++ b/transformer_engine/common/comm_gemm_overlap/comm_gemm_overlap.cpp
+@@ -11,6 +11,7 @@
+ #include <transformer_engine/ub_deepgemm.h>
+ 
+ #include <cassert>
++#include <cuda_bf16.h>
+ 
+ #include <cstdlib>
+ #include <numeric>
+@@ -545,6 +546,7 @@
+                                              TensorWrapper &bias, TensorWrapper &pre_gelu_out,
+                                              TensorWrapper &workspace, bool grad, bool accumulate,
+                                              bool use_split_accumulator, TensorWrapper &rs_output,
++                                             const TensorWrapper &pre_rs_add,
+                                              cudaStream_t stream_main) {
+   if (_with_cublasmp) {
+     auto [m, n, k] = compute_rs_dims(A, transa, B, transb, _tp_size);
+@@ -585,6 +587,16 @@
+   NVTE_CHECK_CUDA(cudaStreamWaitEvent(_stream_compute[0], _start_compute, 0));
+   NVTE_CHECK_CUDA(cudaStreamWaitEvent(_stream_comm, _start_compute, 0));
+ 
++  if (pre_rs_add.numel() > 0) {
++    NVTE_CHECK(pre_rs_add.numel() == n * m && pre_rs_add.element_size() == 2 &&
++                   D.element_size() == 2 && !accumulate,
++               "pre-RS delta must be the contiguous [n, m] BF16 userbuffer layout and "
++               "cannot combine with caller accumulate");
++    NVTE_CHECK_CUDA(cudaMemcpyAsync(_ubuf.dptr(), pre_rs_add.dptr(), n * m * 2,
++                                    cudaMemcpyDeviceToDevice, _stream_compute[0]));
++    accumulate = true;  // beta=1: userbuffer = delta + A@B
++  }
++
+   assert(pre_gelu_out.numel() == 0);
+ 
+   auto output_d = get_buffer_chunk_like(D, 0, {n, m});
+@@ -647,6 +659,11 @@
+   NVTE_CHECK_CUDA(cudaStreamWaitEvent(stream_main, _stop_comm, 0));
+ }  // split_overlap_rs
+ 
++void launch_pre_rs_add(char *dst, const char *src, size_t chunk, size_t n, size_t m, size_t m_chunk,
++                       cudaStream_t stream);
++void launch_pre_rs_add_p2p(char *dst, const char *src, size_t c0, size_t n, size_t m,
++                           size_t m_chunk, cudaStream_t stream);
++
+ /*
+ ** Split FPROP GEMM + ReduceScatter
+ */
+@@ -654,7 +671,8 @@
+                                        bool transb, TensorWrapper &D, TensorWrapper &bias,
+                                        TensorWrapper &pre_gelu_out, TensorWrapper &workspace,
+                                        bool grad, bool accumulate, bool use_split_accumulator,
+-                                       TensorWrapper &rs_output, cudaStream_t stream_main) {
++                                       TensorWrapper &rs_output, const TensorWrapper &pre_rs_add,
++                                       cudaStream_t stream_main) {
+   if (_with_cublasmp) {
+     auto [m, n, k] = compute_rs_dims(A, transa, B, transb, _tp_size);
+     // col-major GEMM compute overlapped with reduce-scatter on the output
+@@ -682,6 +700,12 @@
+   size_t output_chunk_size = n * m_chunk;
+   size_t workspace_size_chunk = workspace.numel() / _stream_compute.size();
+ 
++  if (pre_rs_add.numel() > 0) {
++    NVTE_CHECK(pre_rs_add.numel() == n * m && pre_rs_add.element_size() == 2 &&
++                   D.element_size() == 2,
++               "pre-RS delta must be the [n, m] BF16 userbuffer layout");
++  }
++
+   // Helper function to get bias chunk if needed
+   auto maybe_get_bias_chunk = [this, &bias, m_chunk](size_t chunk_id) -> TensorWrapper {
+     if (bias.dptr() == nullptr) {
+@@ -709,6 +733,11 @@
+     ub_chunk_gemm(input_a_chunk, transa, B, transb, output_chunk, grad, bias_chunk, pre_gelu_out,
+                   accumulate, workspace_chunk, use_split_accumulator, _math_sms,
+                   _stream_compute[0]);
++    if (pre_rs_add.numel() > 0) {
++      launch_pre_rs_add(reinterpret_cast<char *>(output_chunk.dptr()),
++                        reinterpret_cast<const char *>(pre_rs_add.dptr()), 0, n, m, m_chunk,
++                        _stream_compute[0]);
++    }
+ 
+     for (int i = 1; i < _num_splits; i++) {
+       input_a_chunk = get_tensor_chunk(A, i * input_a_chunk_size, input_a_chunk_shape);
+@@ -720,6 +749,12 @@
+       ub_chunk_gemm(input_a_chunk, transa, B, transb, output_chunk, grad, bias_chunk, pre_gelu_out,
+                     accumulate, workspace_chunk, use_split_accumulator, _math_sms,
+                     _stream_compute[i % _stream_compute.size()]);
++      if (pre_rs_add.numel() > 0) {
++        launch_pre_rs_add(
++            reinterpret_cast<char *>(output_chunk.dptr()),
++            reinterpret_cast<const char *>(pre_rs_add.dptr()), i, n, m, m_chunk,
++            _stream_compute[i % _stream_compute.size()]);
++      }
+ 
+       NVTE_CHECK_CUDA(
+           cudaEventRecord(_start_comm, _stream_compute[(i - 1) % _stream_compute.size()]));
+@@ -768,6 +803,12 @@
+       ub_chunk_gemm(input_a_chunk, transa, B, transb, output_chunk, grad, bias_chunk, pre_gelu_out,
+                     accumulate, workspace_chunk, use_split_accumulator, _math_sms,
+                     _stream_compute[i % _stream_compute.size()]);
++      if (pre_rs_add.numel() > 0) {
++        launch_pre_rs_add(
++            reinterpret_cast<char *>(output_chunk.dptr()),
++            reinterpret_cast<const char *>(pre_rs_add.dptr()), i, n, m, m_chunk,
++            _stream_compute[i % _stream_compute.size()]);
++      }
+ 
+       NVTE_CHECK_CUDA(cudaEventRecord(_start_comm, _stream_compute[i % _stream_compute.size()]));
+       NVTE_CHECK_CUDA(cudaStreamWaitEvent(_stream_comm, _start_comm, 0));
+@@ -1283,7 +1324,10 @@
+     const TensorWrapper &A, bool transa, const TensorWrapper &B, bool transb, TensorWrapper &D,
+     TensorWrapper &bias, TensorWrapper &pre_gelu_out, TensorWrapper &workspace, bool grad,
+     bool accumulate, bool use_split_accumulator, TensorWrapper &rs_output,
+-    cudaStream_t stream_main) {
++    const TensorWrapper &pre_rs_add, cudaStream_t stream_main) {
++  NVTE_CHECK(pre_rs_add.numel() == 0,
++             "pre-RS delta is unsupported on the P2P atomic GEMM+RS overlap (supported: the "
++             "pipeline overlap, the atomic overlap, and the P2P split/ring_exchange overlap)");
+   if (_with_cublasmp) {
+     auto [m, n, k] = compute_rs_dims(A, transa, B, transb, _tp_size);
+     // col-major GEMM compute overlapped with reduce-scatter on the output
+@@ -1359,8 +1403,11 @@
+                                           TensorWrapper &bias, TensorWrapper &pre_gelu_out,
+                                           TensorWrapper &workspace, bool grad, bool accumulate,
+                                           bool use_split_accumulator, TensorWrapper &rs_output,
++                                          const TensorWrapper &pre_rs_add,
+                                           cudaStream_t stream_main) {
+   if (_with_cublasmp) {
++    NVTE_CHECK(pre_rs_add.numel() == 0,
++               "pre-RS delta is unsupported with cuBLASMp (the fused path would drop it)");
+     auto [m, n, k] = compute_rs_dims(A, transa, B, transb, _tp_size);
+     // col-major GEMM compute overlapped with reduce-scatter on the output
+     // (M, K/P) x (K/P, N) = (M, N) -(RS)-> (M, N/P)
+@@ -1388,6 +1435,14 @@
+   size_t output_chunk_size = n_chunk * m;
+   size_t workspace_size_chunk = workspace.numel() / _stream_compute.size();
+ 
++  if (pre_rs_add.numel() > 0) {
++    NVTE_CHECK(pre_rs_add.element_size() == 2 &&
++                   pre_rs_add.element_size() == _ubufs[0].element_size() &&
++                   pre_rs_add.numel() == m * static_cast<size_t>(_tp_size) * n_chunk,
++               "pre_rs_add must be the contiguous BF16 [tokens, out_features] delta matching "
++               "the ubuf dtype (tokens = tp_size * chunk tokens)");
++  }
++
+   // Catch up the main stream
+   NVTE_CHECK_CUDA(cudaEventRecord(_start_compute, stream_main));
+   for (size_t i = 0; i < _stream_send.size(); i++) {
+@@ -1424,6 +1479,13 @@
+     ub_chunk_gemm(A, transa, input_b_chunk, transb, output_chunk, grad, bias, pre_gelu_out,
+                   accumulate, workspace_chunk, use_split_accumulator, _math_sms,
+                   _stream_compute[stream_id]);
++    if (pre_rs_add.numel() > 0) {
++      launch_pre_rs_add_p2p(reinterpret_cast<char *>(_ubufs[i].dptr()),
++                            reinterpret_cast<const char *>(pre_rs_add.dptr()),
++                            static_cast<size_t>(input_b_chunk_id) * n_chunk, m,
++                            static_cast<size_t>(_tp_size) * n_chunk, n_chunk,
++                            _stream_compute[stream_id]);
++    }
+ 
+     if (i > 0) {
+       // P2P communication chunk
+diff --git a/transformer_engine/common/comm_gemm_overlap/pre_rs_add.cu b/transformer_engine/common/comm_gemm_overlap/pre_rs_add.cu
+new file mode 100644
+--- /dev/null
++++ b/transformer_engine/common/comm_gemm_overlap/pre_rs_add.cu
+@@ -0,0 +1,64 @@
++#include <algorithm>
++#include <cstdint>
++
++#include <cuda_bf16.h>
++#include <cuda_runtime.h>
++
++#include "common/util/logging.h"
++
++namespace transformer_engine {
++
++__global__ void pre_rs_add_kernel(__nv_bfloat162 *dst, const __nv_bfloat162 *src, size_t chunk,
++                                  size_t row_pairs, size_t src_row_stride_pairs) {
++  const size_t o = blockIdx.x;
++  __nv_bfloat162 *d = dst + o * row_pairs;
++  const __nv_bfloat162 *s = src + o * src_row_stride_pairs + chunk * row_pairs;
++  for (size_t j = threadIdx.x; j < row_pairs; j += blockDim.x) {
++    d[j] = __hadd2(d[j], s[j]);
++  }
++}
++
++void launch_pre_rs_add(char *dst, const char *src, size_t chunk, size_t n, size_t m, size_t m_chunk,
++                       cudaStream_t stream) {
++  NVTE_CHECK(m % 2 == 0 && m_chunk % 2 == 0,
++             "pre-RS add expects even token counts (BF16 pairs)");
++  const int block = 256;
++  pre_rs_add_kernel<<<static_cast<unsigned int>(n), block, 0, stream>>>(
++      reinterpret_cast<__nv_bfloat162 *>(dst), reinterpret_cast<const __nv_bfloat162 *>(src),
++      chunk, m_chunk / 2, m / 2);
++  NVTE_CHECK_CUDA(cudaGetLastError());
++}
++
++__global__ void pre_rs_add_p2p_kernel(uint4 *dst, const uint4 *src, size_t vecs) {
++  for (size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x; i < vecs;
++       i += static_cast<size_t>(gridDim.x) * blockDim.x) {
++    uint4 d = dst[i];
++    const uint4 s = src[i];
++    __nv_bfloat162 *dh = reinterpret_cast<__nv_bfloat162 *>(&d);
++    const __nv_bfloat162 *sh = reinterpret_cast<const __nv_bfloat162 *>(&s);
++#pragma unroll
++    for (int k = 0; k < 4; k++) dh[k] = __hadd2(dh[k], sh[k]);
++    dst[i] = d;
++  }
++}
++
++void launch_pre_rs_add_p2p(char *dst, const char *src, size_t c0, size_t n, size_t m,
++                           size_t m_chunk, cudaStream_t stream) {
++  (void)m;
++  const size_t elems = m_chunk * n;
++  NVTE_CHECK(elems % 8 == 0 && (c0 * n) % 8 == 0,
++             "pre-RS add (P2P) expects 16-byte aligned token-major chunks");
++  NVTE_CHECK(reinterpret_cast<uintptr_t>(dst) % 16 == 0 &&
++                 reinterpret_cast<uintptr_t>(src) % 16 == 0,
++             "pre-RS add (P2P) expects 16-byte aligned buffers");
++  const size_t vecs = elems / 8;
++  const int block = 512;
++  const unsigned int grid =
++      static_cast<unsigned int>(std::min<size_t>((vecs + block - 1) / block, 132 * 8));
++  pre_rs_add_p2p_kernel<<<grid, block, 0, stream>>>(
++      reinterpret_cast<uint4 *>(dst),
++      reinterpret_cast<const uint4 *>(src) + (c0 * n) / 8, vecs);
++  NVTE_CHECK_CUDA(cudaGetLastError());
++}
++
++}  // namespace transformer_engine
+diff --git a/transformer_engine/common/include/transformer_engine/comm_gemm_overlap.h b/transformer_engine/common/include/transformer_engine/comm_gemm_overlap.h
+--- a/transformer_engine/common/include/transformer_engine/comm_gemm_overlap.h
++++ b/transformer_engine/common/include/transformer_engine/comm_gemm_overlap.h
+@@ -157,7 +157,8 @@
+                                       bool transb, TensorWrapper &D, TensorWrapper &bias,
+                                       TensorWrapper &pre_gelu_out, TensorWrapper &workspace,
+                                       bool grad, bool accumulate, bool use_split_accumulator,
+-                                      TensorWrapper &rs_output, cudaStream_t stream_main) {
++                                      TensorWrapper &rs_output, const TensorWrapper &pre_rs_add,
++                                      cudaStream_t stream_main) {
+     NVTE_ERROR("Operation is not implemented.");
+   }
+ 
+@@ -165,7 +166,8 @@
+                                 bool transb, TensorWrapper &D, TensorWrapper &bias,
+                                 TensorWrapper &pre_gelu_out, TensorWrapper &workspace, bool grad,
+                                 bool accumulate, bool use_split_accumulator,
+-                                TensorWrapper &rs_output, cudaStream_t stream_main) {
++                                TensorWrapper &rs_output, const TensorWrapper &pre_rs_add,
++                                cudaStream_t stream_main) {
+     NVTE_ERROR("Operation is not implemented.");
+   }
+ 
+@@ -256,7 +258,7 @@
+                               bool transb, TensorWrapper &D, TensorWrapper &bias,
+                               TensorWrapper &pre_gelu_out, TensorWrapper &workspace, bool grad,
+                               bool accumulate, bool use_split_accumulator, TensorWrapper &rs_output,
+-                              cudaStream_t stream_main) override;
++                              const TensorWrapper &pre_rs_add, cudaStream_t stream_main) override;
+ 
+   /*
+   ** Split FPROP GEMM + ReduceScatter
+@@ -265,7 +267,7 @@
+                         TensorWrapper &D, TensorWrapper &bias, TensorWrapper &pre_gelu_out,
+                         TensorWrapper &workspace, bool grad, bool accumulate,
+                         bool use_split_accumulator, TensorWrapper &rs_output,
+-                        cudaStream_t stream_main) override;
++                        const TensorWrapper &pre_rs_add, cudaStream_t stream_main) override;
+ 
+   void bulk_overlap_external_ag(cudaStream_t send_stream, cudaStream_t recv_stream,
+                                 cudaStream_t stream_main) override;
+@@ -353,7 +355,7 @@
+                               bool transb, TensorWrapper &D, TensorWrapper &bias,
+                               TensorWrapper &pre_gelu_out, TensorWrapper &workspace, bool grad,
+                               bool accumulate, bool use_split_accumulator, TensorWrapper &rs_output,
+-                              cudaStream_t stream_main) override;
++                              const TensorWrapper &pre_rs_add, cudaStream_t stream_main) override;
+ 
+   /*
+   ** Split ReduceScatter + GEMM using P2P communication
+@@ -362,7 +364,7 @@
+                         TensorWrapper &D, TensorWrapper &bias, TensorWrapper &pre_gelu_out,
+                         TensorWrapper &workspace, bool grad, bool accumulate,
+                         bool use_split_accumulator, TensorWrapper &rs_output,
+-                        cudaStream_t stream_main) override;
++                        const TensorWrapper &pre_rs_add, cudaStream_t stream_main) override;
+ 
+   /*
+   ** This function overlaps the AG for the current communicator object with the GEMM for the overlap_gemm object.
+diff --git a/transformer_engine/pytorch/cpp_extensions/gemm.py b/transformer_engine/pytorch/cpp_extensions/gemm.py
+--- a/transformer_engine/pytorch/cpp_extensions/gemm.py
++++ b/transformer_engine/pytorch/cpp_extensions/gemm.py
+@@ -208,6 +208,7 @@
+     ub_type: tex.CommOverlapType = None,
+     extra_output: Optional[torch.Tensor] = None,
+     bulk_overlap: bool = False,
++    pre_rs_add: Optional[torch.Tensor] = None,
+ ) -> Iterable[Optional[torch.Tensor]]:
+     """GEMM supporting fp8 inputs."""
+ 
+@@ -238,6 +239,13 @@
+         if ub_type == tex.CommOverlapType.RS:
+             if not (bulk_overlap and not ub.is_fp8_ubuf()):
+                 assert extra_output is not None, "GEMM+RS overlap requires extra output tensor."
++            if pre_rs_add is not None:
++                assert (
++                    ub_type == tex.CommOverlapType.RS
++                    and not bulk_overlap
++                    and not ub.is_fp8_ubuf()
++                    and pre_rs_add.dtype == torch.bfloat16
++                ), "pre_rs_add requires the pipeline GEMM+RS overlap with a BF16 userbuffer"
+ 
+     if out is not None:
+         if not out.is_contiguous():
+@@ -295,6 +303,7 @@
+         "bulk_overlap": bulk_overlap,
+         "alpha": alpha,
+         "beta": beta,
++        "pre_rs_add": pre_rs_add,
+     }
+ 
+     if not _is_nvfp4_row_scaled_tensor(A) and not _is_nvfp4_row_scaled_tensor(B):
+diff --git a/transformer_engine/pytorch/csrc/extensions/comm_gemm_overlap.cpp b/transformer_engine/pytorch/csrc/extensions/comm_gemm_overlap.cpp
+--- a/transformer_engine/pytorch/csrc/extensions/comm_gemm_overlap.cpp
++++ b/transformer_engine/pytorch/csrc/extensions/comm_gemm_overlap.cpp
+@@ -294,11 +294,13 @@
+     if (core->is_atomic_gemm()) {
+       core->atomic_gemm_overlap_rs(
+           A_tw, /*transa=*/true, B_tw, /*transb=*/false, D_tw, bias_tw, pre_gelu_tw, dummy,
+-          /*grad=*/false, /*accumulate=*/false, /*use_split_accumulator=*/false, dummy, stream);
++          /*grad=*/false, /*accumulate=*/false, /*use_split_accumulator=*/false, dummy,
++          /*pre_rs_add=*/dummy, stream);
+     } else {
+       core->split_overlap_rs(
+           A_tw, /*transa=*/true, B_tw, /*transb=*/false, D_tw, bias_tw, pre_gelu_tw, dummy,
+-          /*grad=*/false, /*accumulate=*/false, /*use_split_accumulator=*/false, dummy, stream);
++          /*grad=*/false, /*accumulate=*/false, /*use_split_accumulator=*/false, dummy,
++          /*pre_rs_add=*/dummy, stream);
+     }
+   }
+   NVTE_CHECK_CUDA(cudaStreamSynchronize(stream));
+diff --git a/transformer_engine/pytorch/csrc/extensions/gemm.cpp b/transformer_engine/pytorch/csrc/extensions/gemm.cpp
+--- a/transformer_engine/pytorch/csrc/extensions/gemm.cpp
++++ b/transformer_engine/pytorch/csrc/extensions/gemm.cpp
+@@ -147,7 +147,8 @@
+                              at::Tensor workspace, size_t workspaceSize, bool accumulate,
+                              bool use_split_accumulator, CommOverlapCore* comm_overlap,
+                              std::optional<CommOverlapType> comm_type, MaybeTensor extra_output,
+-                             bool bulk_overlap, float alpha, std::optional<float> beta) {
++                             bool bulk_overlap, float alpha, std::optional<float> beta,
++                             MaybeTensor pre_rs_add) {
+   using namespace transformer_engine::pytorch::detail;
+ 
+   // Ensure that cublasLt handle is created on the correct device,
+@@ -332,6 +333,20 @@
+             makeTransformerEngineTensor(nullptr, std::vector<size_t>{0}, DType::kByte);
+       }
+ 
++      TensorWrapper pre_rs_add_tensor;
++      if (pre_rs_add.has_value() && pre_rs_add->defined()) {
++        NVTE_CHECK(comm_type.value() == CommOverlapType::RS,
++                   "pre_rs_add requires a GEMM+RS userbuffers overlap (got an AG overlap)");
++        NVTE_CHECK(!bulk_overlap, "pre_rs_add is unsupported on the bulk overlap");
++        NVTE_CHECK(!comm_overlap->with_cublasmp(), "pre_rs_add is unsupported with cuBLASMp");
++        if (comm_overlap->is_atomic_gemm()) {
++          NVTE_CHECK(!accumulate,
++                     "pre_rs_add on the atomic GEMM+RS overlap requires caller "
++                     "accumulate=false (the delta pre-fill rides beta=1)");
++        }
++        pre_rs_add_tensor = makeTransformerEngineTensor(*pre_rs_add);
++      }
++
+       // Direct GEMM call to the correct overlap
+       if (bulk_overlap) {
+         NVTE_SCOPED_GIL_RELEASE({
+@@ -362,14 +377,15 @@
+             comm_overlap->atomic_gemm_overlap_rs(A_tensor, transa, B_tensor, transb, out_tensor,
+                                                  bias_tensor, te_pre_gelu_out, te_workspace, grad,
+                                                  accumulate, use_split_accumulator,
+-                                                 extra_output_tensor, main_stream);
++                                                 extra_output_tensor, pre_rs_add_tensor,
++                                                 main_stream);
+           });
+         } else {
+           NVTE_SCOPED_GIL_RELEASE({
+             comm_overlap->split_overlap_rs(A_tensor, transa, B_tensor, transb, out_tensor,
+                                            bias_tensor, te_pre_gelu_out, te_workspace, grad,
+                                            accumulate, use_split_accumulator, extra_output_tensor,
+-                                           main_stream);
++                                           pre_rs_add_tensor, main_stream);
+           });
+         }
+       }
+diff --git a/transformer_engine/pytorch/csrc/extensions/pybind.cpp b/transformer_engine/pytorch/csrc/extensions/pybind.cpp
+--- a/transformer_engine/pytorch/csrc/extensions/pybind.cpp
++++ b/transformer_engine/pytorch/csrc/extensions/pybind.cpp
+@@ -254,7 +254,8 @@
+         py::arg("workspace_size"), py::arg("accumulate"), py::arg("use_split_accumulator"),
+         py::arg("comm_overlap") = nullptr, py::arg("comm_type") = std::nullopt,
+         py::arg("extra_output") = std::nullopt, py::arg("bulk_overlap") = false,
+-        py::arg("alpha") = 1.0f, py::arg("beta") = std::nullopt);
++        py::arg("alpha") = 1.0f, py::arg("beta") = std::nullopt,
++        py::arg("pre_rs_add") = std::nullopt);
+   /* GLU (sigmoid gate) */
+   m.def("glu", transformer_engine::pytorch::glu, "GLU activation", py::arg("input"),
+         py::arg("quantizer"));
+diff --git a/transformer_engine/pytorch/csrc/extensions.h b/transformer_engine/pytorch/csrc/extensions.h
+--- a/transformer_engine/pytorch/csrc/extensions.h
++++ b/transformer_engine/pytorch/csrc/extensions.h
+@@ -155,7 +155,8 @@
+                              bool use_split_accumulator, CommOverlapCore *comm_overlap = nullptr,
+                              std::optional<CommOverlapType> comm_type = std::nullopt,
+                              MaybeTensor extra_output = std::nullopt, bool bulk_overlap = false,
+-                             float alpha = 1.0f, std::optional<float> beta = std::nullopt);
++                             float alpha = 1.0f, std::optional<float> beta = std::nullopt,
++                             MaybeTensor pre_rs_add = std::nullopt);
+ 
+ void te_atomic_gemm(at::Tensor A, at::Tensor A_scale_inverse, DType A_type,
+                     std::vector<int64_t> A_scaling_mode, bool transa, at::Tensor B,
+diff --git a/transformer_engine/pytorch/module/linear.py b/transformer_engine/pytorch/module/linear.py
+--- a/transformer_engine/pytorch/module/linear.py
++++ b/transformer_engine/pytorch/module/linear.py
+@@ -180,6 +180,8 @@
+     cpu_offloading: bool
+     is_grad_enabled: bool
+ 
++    lora_delta: Optional[torch.Tensor] = None
++
+     def compile_unsupported_reason(self) -> Optional[str]:
+         """Reason this config can't use the torch.compile custom-op path (else None)."""
+         if self.debug:
+@@ -302,6 +304,8 @@
+     cpu_offloading: bool = False
+     owns_input: bool = False
+ 
++    lora_delta_requires_grad: bool = False
++
+     # --- Per-backward scratch state (populated inside _linear_backward_impl) ---
+     ub_obj_gradout: Optional[Any] = None
+ 
+@@ -620,6 +624,21 @@
+     reduce_scatter_out = None
+     if ub_overlap_rs_fprop:
+         out_shape = list(inp.shape)
++        if args.lora_delta is not None:
++            if ub_obj is not None and ub_obj.with_cublasmp():
++                raise ValueError(
++                    "lora pre-RS delta requires the userbuffers pipeline, atomic, or "
++                    "P2P ring-exchange RS overlap"
++                )
++            tokens = reduce(multiply_op, inp.shape[:-1], 1)
++            if (tuple(args.lora_delta.shape) != (tokens, out_features)
++                    or args.lora_delta.dtype != activation_dtype
++                    or not args.lora_delta.is_contiguous()):
++                raise ValueError(
++                    "lora pre-RS delta must be a contiguous [flattened tokens, out_features] "
++                    "tensor in the activation dtype (got "
++                    f"{tuple(args.lora_delta.shape)}, {args.lora_delta.dtype})"
++                )
+         out_shape[0] //= tp_world_size
+         out_shape[-1] = out_features
+         reduce_scatter_out = torch.empty(out_shape, dtype=activation_dtype, device=inp.device)
+@@ -639,6 +658,7 @@
+         ub=ub_obj,
+         ub_type=ub_type,
+         extra_output=reduce_scatter_out,
++        pre_rs_add=args.lora_delta,
+     )
+     nvtx_range_pop(f"{nvtx_label}.gemm")
+     # ------------------------------------------------------
+@@ -1068,6 +1088,9 @@
+     # FSDP
+     bwd_args.fsdp_group = fwd_args.fsdp_group
+     bwd_args.fsdp_shapes = ctx_attrs["fsdp_shapes"]
++    bwd_args.lora_delta_requires_grad = (
++        fwd_args.lora_delta is not None and fwd_args.lora_delta.requires_grad
++    )
+     bwd_args.is_fsdp2 = fwd_args.is_fsdp2
+ 
+     # Weight-grad scheduling / accumulation
+@@ -1725,6 +1748,19 @@
+     # Scatter fp8 weight buffers
+     if bwd_args.fp8 and not bwd_args.is_weight_param_quantized:
+         _fsdp_scatter_tensors(bwd_args.fsdp_group, weight_fp8)
++
++    grad_lora_delta = None
++    if getattr(bwd_args, "lora_delta_requires_grad", False):
++        grad_lora_delta = grad_output
++        if isinstance(grad_lora_delta, QuantizedTensorStorage):
++            grad_lora_delta = grad_lora_delta.dequantize(dtype=bwd_args.activation_dtype)
++        grad_lora_delta = grad_lora_delta.reshape(-1, grad_lora_delta.shape[-1])
++        return (
++            wgrad,
++            dgrad.view(bwd_args.inp_shape) if bwd_args.requires_dgrad else None,
++            grad_bias,
++            grad_lora_delta,
++        )
+     return (
+         wgrad,
+         dgrad.view(bwd_args.inp_shape) if bwd_args.requires_dgrad else None,
+@@ -1819,6 +1855,7 @@
+         weight: torch.Tensor,
+         inp: torch.Tensor,
+         bias: Optional[torch.Tensor],
++        lora_delta: Optional[torch.Tensor],
+         fwd_args: LinearFwdArgs,
+     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+         """Forward pass: compute linear output and set up autograd context.
+@@ -1835,6 +1872,7 @@
+         fwd_args.weight = weight
+         fwd_args.inp = inp
+         fwd_args.bias = bias
++        fwd_args.lora_delta = lora_delta
+         (
+             out,
+             new_weight_workspace,
+@@ -1878,7 +1916,10 @@
+         nvtx_label = "transformer_engine._Linear.backward"
+         if bwd_args.ub_name is not None:
+             nvtx_label = f"{nvtx_label}.{bwd_args.ub_name}"
+-        result = _linear_backward_impl(bwd_args) + (None,)  # fwd_args grad slot
++        result = _linear_backward_impl(bwd_args)
++        if len(result) == 3:
++            result = result + (None,)  # lora_delta grad slot (no delta supplied)
++        result = result + (None,)  # fwd_args grad slot
+         reduce_and_update_bwd_fp8_tensors = bwd_args.reduce_and_update_bwd_fp8_tensors
+         # Drop all references held by bwd_args (saved tensors, quantizers, weakrefs,
+         # main_grad closure) so they don't outlive backward via ctx under retain_graph.
+@@ -1896,13 +1937,14 @@
+     weight_tensor: torch.Tensor,
+     inp: torch.Tensor,
+     bias: Optional[torch.Tensor],
++    lora_delta: Optional[torch.Tensor],
+     fwd_args: LinearFwdArgs,
+     is_grad_enabled: bool,
+ ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+     """Run ``_Linear`` eagerly, bypassing Dynamo."""
+     if is_grad_enabled:
+-        return _Linear.apply(weight_tensor, inp, bias, fwd_args)
+-    return _Linear.forward(None, weight_tensor, inp, bias, fwd_args)
++        return _Linear.apply(weight_tensor, inp, bias, lora_delta, fwd_args)
++    return _Linear.forward(None, weight_tensor, inp, bias, lora_delta, fwd_args)
+ 
+ 
+ class Linear(TransformerEngineBaseModule):
+@@ -2373,6 +2415,14 @@
+         """
+         is_grad_enabled = torch.is_grad_enabled()
+ 
++        lora_delta = getattr(self, "_lora_pre_rs_delta", None)
++        if lora_delta is not None:
++            self._lora_pre_rs_delta = None
++            if torch.compiler.is_compiling():
++                raise NotImplementedError(
++                    "lora pre-RS delta is not supported under torch.compile"
++                )
++
+         if is_in_onnx_export_mode():
+             return self.onnx_forward(inp, fp8_output, is_grad_enabled)
+ 
+@@ -2559,7 +2609,7 @@
+                 out, new_weight_workspace = _linear_op(fwd_args)
+             else:
+                 out, new_weight_workspace = _linear_eager(
+-                    weight_tensor, inp, linear_bias_tensor, fwd_args, is_grad_enabled
++                    weight_tensor, inp, linear_bias_tensor, lora_delta, fwd_args, is_grad_enabled
+                 )
+ 
+             if new_weight_workspace is not None and cache_name is not None:
+@@ -2795,3 +2845,6 @@
+         weight_quantizer = self.quantizers["scaling_fwd"][FP8FwdTensorIdx.GEMM1_WEIGHT]
+         weight_quantizer.internal = True
+         return [weight_quantizer]
++
++
++_LORA_PRE_RS_JOIN = True

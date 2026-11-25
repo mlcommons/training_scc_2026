@@ -1,0 +1,3 @@
+No patches. These runs used mlcommons/training_results_v6.0 at eabf23a07b2a0c60a289ff871dc3a46fff0d0421,
+Dell/benchmarks/llama2_70b_lora/implementations/nemo, without changes (git status of our checkout shows no modified
+tracked files). TP_COMM_OVERLAP=False. The launcher scripts we used are in launcher/; see ../README.md.

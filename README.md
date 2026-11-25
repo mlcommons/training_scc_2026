@@ -3,6 +3,22 @@
 This guide is designed for the Student Cluster Competition to walk participants through running and optimizing the MLPerf Training Benchmark using Llama 2 70B (LoRA Fine-Tuning) across various software and cluster hardware configurations. The goal is to minimize `Time-to-Train (TTT = run_stop - run_start)` while achieving the targeted convergence accuracy.
 The benchmark task fine-tunes LLaMA 2 70B on the SCROLLS dataset (question-summary pairs from official government research reports) using Low-Rank Adaptation (LoRA), which optimizes rank decomposition matrices while keeping pre-trained weights frozen. Leads for this track are Miro Hodak (MLCommons/AMD) and Shriya Rishab (MLCommons/Nvidia).
 
+## Student implementations and results
+
+Each team directory contains its submitted system description, training implementation and run logs. Start with the benchmark README for the configuration used in the final runs. The original pull requests preserve the teams’ earlier configurations and optimization work where they differ.
+
+| Team | Final implementation | System | Run logs | Earlier contribution |
+| --- | --- | --- | --- | --- |
+| Clemson | [Benchmark](Clemson/benchmarks/llama2_70b_lora/) | [System](Clemson/systems/) | [Results](Clemson/results/student_system/llama2_70b_lora/) | [PR #8](https://github.com/mlcommons/training_scc_2026/pull/8) |
+| Gig ’Em Bytes | [Benchmark](GigEmBytes/benchmarks/llama2_70b_lora/) | [System](GigEmBytes/systems/) | [Results](GigEmBytes/results/student_system/llama2_70b_lora/) | [PR #3](https://github.com/mlcommons/training_scc_2026/pull/3) |
+| Isambards | [Benchmark](isambards/benchmarks/llama2_70b_lora/) | [System](isambards/systems/) | [Results](isambards/results/student_system/llama2_70b_lora/) | [PR #7](https://github.com/mlcommons/training_scc_2026/pull/7) |
+| NTHU | [Benchmark](NTHU/benchmarks/llama2_70b_lora/) | [System](NTHU/systems/) | [Results](NTHU/results/student_system/llama2_70b_lora/) | |
+| NTU | [Benchmark](NTU/benchmarks/llama2_70b_lora/) | [System](NTU/systems/) | [Results](NTU/results/student_system/llama2_70b_lora/) | |
+| RACKlette | [Benchmark](RACKlette/benchmarks/llama2_70b_lora/) | [System](RACKlette/systems/) | [Results](RACKlette/results/student_system/llama2_70b_lora/) | [PR #6](https://github.com/mlcommons/training_scc_2026/pull/6) |
+| SeaShell | [Benchmark](SeaShell/benchmarks/llama2_70b_lora/) | [System](SeaShell/systems/) | [Results](SeaShell/results/student_system/llama2_70b_lora/) | [PR #4](https://github.com/mlcommons/training_scc_2026/pull/4) |
+| SegFAUlt | [Benchmark](SegFAUlt/benchmarks/llama2_70b_lora/) | [System](SegFAUlt/systems/) | [Results](SegFAUlt/results/student_system/llama2_70b_lora/) | |
+| Supernova | [Benchmark](Supernova/benchmarks/llama2_70b_lora/) | [System](Supernova/systems/) | [Results](Supernova/results/student_system/llama2_70b_lora/) | [PR #5](https://github.com/mlcommons/training_scc_2026/pull/5) |
+
 ## Scoring
 In the SCC, your primary objective is to produce a compliant, fully verified MLPerf training submission. Teams will compete across three main scoring dimensions: Absolute Performance (lowest TTT), Relative Performance (efficient scaling given hardware capacity), and Technical Innovations (creative distributed optimizations).
 To receive full credit, teams must complete exactly 10 genuine runs with distinct seeds. Scores are computed as the mean of the middle 8 runs using Olympic trimming (discarding the fastest and slowest runs). Up to 1 failed run is permitted.
