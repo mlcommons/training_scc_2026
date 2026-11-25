@@ -1,0 +1,112 @@
+diff --git a/transformer_engine/common/comm_gemm_overlap/comm_gemm_overlap.cpp b/transformer_engine/common/comm_gemm_overlap/comm_gemm_overlap.cpp
+index e042f5a0..f96de904 100644
+--- a/transformer_engine/common/comm_gemm_overlap/comm_gemm_overlap.cpp
++++ b/transformer_engine/common/comm_gemm_overlap/comm_gemm_overlap.cpp
+@@ -54,21 +54,24 @@ UbDeepGemmChunkFn get_ub_deepgemm_chunk_fn() { return g_ub_deepgemm_chunk_fn; }
+ 
+ namespace {
+ 
+-void ub_chunk_gemm(const TensorWrapper &A, bool transa, const TensorWrapper &B, bool transb,
++bool ub_chunk_gemm(const TensorWrapper &A, bool transa, const TensorWrapper &B, bool transb,
+                    TensorWrapper &D, bool grad, const TensorWrapper &bias,
+                    const TensorWrapper &pre_gelu_out, bool accumulate,
+                    const TensorWrapper &workspace, bool use_split_accumulator, int math_sms,
+-                   cudaStream_t stream) {
++                   cudaStream_t stream, const TensorWrapper &addend = TensorWrapper()) {
+   static const bool provider_enabled = [] {
+     const char *env = std::getenv("DEEPGEMM");
+     return env != nullptr && env[0] == '1';
+   }();
+   if (provider_enabled && !accumulate && !use_split_accumulator && bias.dptr() == nullptr &&
+       pre_gelu_out.numel() == 0 && get_ub_deepgemm_chunk_fn() != nullptr) {
+-    if (get_ub_deepgemm_chunk_fn()(A, transa, B, transb, D, grad, math_sms, stream)) return;
++    if (get_ub_deepgemm_chunk_fn()(A, transa, B, transb, D, grad, math_sms, addend, stream)) {
++      return addend.numel() > 0;
++    }
+   }
+   nvte_cublas_gemm(A.data(), B.data(), D.data(), bias.data(), pre_gelu_out.data(), transa, transb,
+                    grad, workspace.data(), accumulate, use_split_accumulator, math_sms, stream);
++  return false;
+ }
+ 
+ }  // namespace
+@@ -1476,10 +1479,16 @@ void CommOverlapP2PBase::split_overlap_rs(const TensorWrapper &A, bool transa,
+           cudaEventRecord(_start_compute, _stream_compute[(i - 2) % _stream_compute.size()]));
+       NVTE_CHECK_CUDA(cudaStreamWaitEvent(_stream_compute[stream_id], _start_compute));
+     }
+-    ub_chunk_gemm(A, transa, input_b_chunk, transb, output_chunk, grad, bias, pre_gelu_out,
+-                  accumulate, workspace_chunk, use_split_accumulator, _math_sms,
+-                  _stream_compute[stream_id]);
++    TensorWrapper delta_chunk;
+     if (pre_rs_add.numel() > 0) {
++      delta_chunk = get_tensor_chunk(pre_rs_add, static_cast<size_t>(input_b_chunk_id) * n_chunk * m,
++                                     {n_chunk, m});
++    }
++    const bool delta_folded =
++        ub_chunk_gemm(A, transa, input_b_chunk, transb, output_chunk, grad, bias, pre_gelu_out,
++                      accumulate, workspace_chunk, use_split_accumulator, _math_sms,
++                      _stream_compute[stream_id], delta_chunk);
++    if (pre_rs_add.numel() > 0 && !delta_folded) {
+       launch_pre_rs_add_p2p(reinterpret_cast<char *>(_ubufs[i].dptr()),
+                             reinterpret_cast<const char *>(pre_rs_add.dptr()),
+                             static_cast<size_t>(input_b_chunk_id) * n_chunk, m,
+diff --git a/transformer_engine/common/include/transformer_engine/ub_deepgemm.h b/transformer_engine/common/include/transformer_engine/ub_deepgemm.h
+index 3164eeec..eb1b149e 100644
+--- a/transformer_engine/common/include/transformer_engine/ub_deepgemm.h
++++ b/transformer_engine/common/include/transformer_engine/ub_deepgemm.h
+@@ -15,7 +15,7 @@ namespace transformer_engine {
+ //
+ using UbDeepGemmChunkFn = bool (*)(const TensorWrapper &A, bool transa, const TensorWrapper &B,
+                                    bool transb, TensorWrapper &D, bool grad, int math_sms,
+-                                   cudaStream_t stream);
++                                   const TensorWrapper &addend, cudaStream_t stream);
+ 
+ void set_ub_deepgemm_chunk_fn(UbDeepGemmChunkFn fn);
+ UbDeepGemmChunkFn get_ub_deepgemm_chunk_fn();
+diff --git a/transformer_engine/pytorch/csrc/extensions/ub_deepgemm.cpp b/transformer_engine/pytorch/csrc/extensions/ub_deepgemm.cpp
+index 9930bb6a..5ce28122 100644
+--- a/transformer_engine/pytorch/csrc/extensions/ub_deepgemm.cpp
++++ b/transformer_engine/pytorch/csrc/extensions/ub_deepgemm.cpp
+@@ -59,7 +59,8 @@ NVTEBasicTensor per_tensor_scale_inv(const TensorWrapper &t) {
+ bool aligned_16(const void *ptr) { return reinterpret_cast<uintptr_t>(ptr) % 16 == 0; }
+ 
+ bool forward_chunk_gemm(const TensorWrapper &A, bool transa, const TensorWrapper &B, bool transb,
+-                        TensorWrapper &D, bool grad, int math_sms, cudaStream_t stream) {
++                        TensorWrapper &D, bool grad, int math_sms, const TensorWrapper &addend,
++                        cudaStream_t stream) {
+   if (grad || !transa || transb) return false;
+   if (A.scaling_mode() != NVTE_DELAYED_TENSOR_SCALING ||
+       B.scaling_mode() != NVTE_DELAYED_TENSOR_SCALING) {
+@@ -95,6 +96,17 @@ bool forward_chunk_gemm(const TensorWrapper &A, bool transa, const TensorWrapper
+   }
+   const auto config = kernel_config(n, k);
+   if (!config.has_value()) return false;
++  const bool with_addend = addend.numel() > 0;
++  NVTEBasicTensor c_data{};
++  if (with_addend) {
++    c_data = addend.get_rowwise_data();
++    const auto c_shape = shape_of(c_data);
++    if (grad || m >= 6144 || addend.dtype() != DType::kBFloat16 || c_shape.size() != 2 ||
++        c_shape[0] != m || c_shape[1] != n || !aligned_16(c_data.data_ptr) ||
++        m % 128 != 0 || n % 256 != 0) {
++      return false;
++    }
++  }
+ 
+   const auto device_index = c10::cuda::current_device();
+   int device_sms = 0;
+@@ -118,10 +130,13 @@ bool forward_chunk_gemm(const TensorWrapper &A, bool transa, const TensorWrapper
+                                    at::dtype(at::kBFloat16).device(device));
+     const auto act_scale = at::from_blob(b_scale.data_ptr, {1}, f32_opts);
+     const auto weight_scale = at::from_blob(a_scale.data_ptr, {1}, f32_opts);
++    const auto c = with_addend ? at::from_blob(c_data.data_ptr, {i64(m), i64(n)},
++                                               at::dtype(at::kBFloat16).device(device))
++                               : torch::Tensor();
+     deep_gemm::sm90_fp8_gemm_per_tensor(act, act_scale, weight, weight_scale, out,
+                                         torch::Tensor(), static_cast<int>(m), static_cast<int>(n),
+                                         static_cast<int>(k), cute::UMMA::Major::K,
+-                                        cute::UMMA::Major::K, "nk", config);
++                                        cute::UMMA::Major::K, "nk", config, torch::Tensor(), c);
+   } catch (...) {
+     launched = false;
+   }

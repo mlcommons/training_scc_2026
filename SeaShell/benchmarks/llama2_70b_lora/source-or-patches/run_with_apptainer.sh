@@ -1,7 +1,6 @@
 #!/bin/bash
 
-# this assumes that run_dir is a directory above code, the directory where this file sits
-RUN_DIR=/mlperf
+RUN_DIR=/projects/scc/mlperf/mi300x # optional not used
 IMAGE=$RUN_DIR/amd-mlperf_llama2_70b_training_6.0_mi300x.sif
 DATA=$RUN_DIR/data
 RESULTS=$RUN_DIR/results
@@ -10,11 +9,8 @@ LOCALCACHE=/scratch/$USER/mlperf_cache
 CODE=$RUN_DIR/code
 
 
-mkdir -p $LOCALCACHE $WORK/cache $WORK/output $WORK/logs $WORK/primus_output $RESULTS
+mkdir -p $LOCALCACHE
 
-if [ ! -f $WORK/overlay.img ]; then
-  apptainer overlay create --size 51200 $WORK/overlay.img
-fi
 
 apptainer run \
   --overlay $WORK/overlay.img \

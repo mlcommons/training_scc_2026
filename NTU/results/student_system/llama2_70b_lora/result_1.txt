@@ -1,0 +1,1662 @@
+++ date +%s
++ echo 'PROLOG_START 1794849836'
+PROLOG_START 1794849836
++ : /scratch/containers/l2l-nemo.sqsh
++ : NTUSCC16TP2_2x8x1xtp2pp1cp1
++ : 300
++ : 1
++ : 6.0.0
++ : single-node
++ : ntu-scc
++ : unknown
++ : 8
++ : 1
++ : 22259
++ : 261117010013582288767
++ : 1
++ : /work/benchmark/MLPerf/runs/sub_22259_010013
++ : /mnt/opt/systools/drop-caches
++ : ''
++ : ''\'' '\'''
++ : ''\'' '\'''
++ : 0
++ : 0
++ : 0
++ : 10
++ : 0
++ : /workspace/ft-llm
++ : ''
++ [[ -n 5017 ]]
++++ scontrol show job 5017
++++ awk -F= '/Command=/{print $2}'
+++ dirname /work/benchmark/MLPerf/MLPerf-training-llama2-lora-70b/run.sub
++ export RUNSUB_DIR=/work/benchmark/MLPerf/MLPerf-training-llama2-lora-70b
++ RUNSUB_DIR=/work/benchmark/MLPerf/MLPerf-training-llama2-lora-70b
++ PYXIS_DEFAULTS=('--no-container-mount-home' '--container-remap-root' '--container-writable')
++ _cenv=
++ [[ 1 -eq 1 ]]
++ export BASH_ENV= ENV=
++ BASH_ENV=
++ ENV=
++ _cenv=BASH_ENV,ENV
++ PYXIS_DEFAULTS+=("--container-env=${_cenv}")
++ : 29500
++ export MASTER_PORT
+++ scontrol show hostnames 'ntu-scc[01-02]'
+++ head -n1
++ export MASTER_ADDR=ntu-scc01
++ MASTER_ADDR=ntu-scc01
++ echo 'using MASTER_ADDR "ntu-scc01" of list "ntu-scc[01-02]"'
+using MASTER_ADDR "ntu-scc01" of list "ntu-scc[01-02]"
++ trap cleanup_pyxis TERM EXIT
++ cleanup_pyxis
++ [[ 1 -eq 1 ]]
++ echo 'REUSE_CONTAINER=1: keeping cached container'
+REUSE_CONTAINER=1: keeping cached container
++ return 0
++ export MODEL_NAME=llama2_70b_lora
++ MODEL_NAME=llama2_70b_lora
++ export MODEL_FRAMEWORK=pytorch
++ MODEL_FRAMEWORK=pytorch
++ LOGBASE=261117010013582288767
++ export DATESTAMP LOGBASE DGXSYSTEM CONT MLPERF_SCALE MLPERF_CLUSTER_NAME MILESTONE_YML EXTRA_ASSETS
++ export SPREFIX=llama2_70b_lora_pytorch_2x8x1_261117010013582288767
++ SPREFIX=llama2_70b_lora_pytorch_2x8x1_261117010013582288767
++ [[ 1 -eq 1 ]]
+++ basename /scratch/containers/l2l-nemo.sqsh .sqsh
++ readonly _cont_name=llama2_70b_lora_persist_l2l-nemo
++ _cont_name=llama2_70b_lora_persist_l2l-nemo
++ readonly _seed_override=
++ _seed_override=
++ source /work/benchmark/MLPerf/MLPerf-training-llama2-lora-70b/config_mounts.sh
+++ : /work/benchmark/MLPerf/runs/sub_22259_010013
+++ _cont_mounts=/scratch/benchmark/MLPerf/data/dataset/nemo_npy:/data:ro,/scratch/benchmark/MLPerf/data/models/llama2_70b_megatron_bridge:/ckpt:ro,/work/benchmark/MLPerf/runs/sub_22259_010013:/results:rw
+++ mounts_to_verify='DATADIR:/data CHECKPOINT:/ckpt'
+++ [[ -n '' ]]
+++ '[' 0 -gt 0 ']'
+++ rm -rf /work/benchmark/MLPerf/runs/sub_22259_010013/data_index/train /work/benchmark/MLPerf/runs/sub_22259_010013/data_index/val
+++ mkdir -p /work/benchmark/MLPerf/runs/sub_22259_010013/data_index/train /work/benchmark/MLPerf/runs/sub_22259_010013/data_index/val
+++ [[ -n '' ]]
+++ [[ 0 -eq 1 ]]
+++ [[ -n /work/benchmark/MLPerf/cache:/compile_cache,/work/benchmark/MLPerf/patches/dg_dgrad_autoload.py:/usr/local/lib/python3.12/dist-packages/dg_dgrad_autoload.py:ro,/work/benchmark/MLPerf/patches/zz_dg_dgrad.pth:/usr/local/lib/python3.12/dist-packages/zz_dg_dgrad.pth:ro,/work/benchmark/MLPerf/gemmlib:/work/benchmark/MLPerf/gemmlib,/work/benchmark/MLPerf/attnkernel:/work/benchmark/MLPerf/attnkernel:ro,/work/benchmark/MLPerf/patches:/work/benchmark/MLPerf/patches:ro ]]
+++ _cont_mounts=/work/benchmark/MLPerf/cache:/compile_cache,/work/benchmark/MLPerf/patches/dg_dgrad_autoload.py:/usr/local/lib/python3.12/dist-packages/dg_dgrad_autoload.py:ro,/work/benchmark/MLPerf/patches/zz_dg_dgrad.pth:/usr/local/lib/python3.12/dist-packages/zz_dg_dgrad.pth:ro,/work/benchmark/MLPerf/gemmlib:/work/benchmark/MLPerf/gemmlib,/work/benchmark/MLPerf/attnkernel:/work/benchmark/MLPerf/attnkernel:ro,/work/benchmark/MLPerf/patches:/work/benchmark/MLPerf/patches:ro,/scratch/benchmark/MLPerf/data/dataset/nemo_npy:/data:ro,/scratch/benchmark/MLPerf/data/models/llama2_70b_megatron_bridge:/ckpt:ro,/work/benchmark/MLPerf/runs/sub_22259_010013:/results:rw
++ readonly _logfile_base=/work/benchmark/MLPerf/runs/sub_22259_010013/261117010013582288767
++ _logfile_base=/work/benchmark/MLPerf/runs/sub_22259_010013/261117010013582288767
+++ srun -N1 -n1 bash
+/usr/bin/bash: line 2: /etc/dgx-release: No such file or directory
++ MLPERF_HOST_OS='Ubuntu 24.04.4 LTS / ??? ???'
++ export MLPERF_HOST_OS
++ umask 0002
++ mkdir -p /work/benchmark/MLPerf/runs/sub_22259_010013
++ srun --ntasks-per-node=1 mkdir -p /work/benchmark/MLPerf/runs/sub_22259_010013
++ [[ -n '' ]]
++ srun --ntasks-per-node=1 --container-image=/scratch/containers/l2l-nemo.sqsh --container-name=llama2_70b_lora_persist_l2l-nemo --no-container-mount-home --container-remap-root --container-writable --container-env=BASH_ENV,ENV true
++ [[ 1 -ne 1 ]]
++ echo 'NCCL_TEST = 0'
+NCCL_TEST = 0
++ [[ 0 -eq 1 ]]
++ [[ 0 -eq 1 ]]
++ [[ 0 -eq 1 ]]
++ '[' -f ''\'' '\''/power_monitor.sh' ']'
++ [[ -f '' ]]
++ [[ -f '' ]]
++ [[ 0 == \1 ]]
++ [[ 0 == \1 ]]
++ '[' 0 -gt 0 ']'
+++ date +%s
++ echo 'PROLOG_STOP 1794849841'
+PROLOG_STOP 1794849841
++ [[ -n '' ]]
++ [[ 1 -eq 1 ]]
+++ srun -N1 -n1 --container-name=llama2_70b_lora_persist_l2l-nemo --no-container-mount-home --container-remap-root --container-writable --container-env=BASH_ENV,ENV mlperf-sysjson.sh
++ _SYSJSON_CACHED='{"submitter":"UNKNOWN_MLPERF_SUBMITTER","division":"closed","status":"Available on-premise","system_name":"UNKNOWN_MLPERF_SYSTEM_NAME","number_of_nodes":"2","host_processors_per_node":"2","host_processor_model_name":"AMD EPYC 9755 128-Core Processor","host_processor_core_count":"128","host_processor_vcpu_count":"","host_processor_frequency":"","host_processor_caches":"","host_processor_interconnect":"","host_memory_capacity":"1.5 TB","host_storage_type":"","host_storage_capacity":"","host_networking":"","host_networking_topology":"","host_memory_configuration":"","accelerators_per_node":"8","accelerator_model_name":"NVIDIA H200 NVL","accelerator_host_interconnect":"","accelerator_frequency":"","accelerator_on-chip_memories":"","accelerator_memory_configuration":"","accelerator_memory_capacity":"143771 MiB","accelerator_interconnect":"","accelerator_interconnect_topology":"","cooling":"","hw_notes":"","framework":"PyTorch NVIDIA Release 26.04","framework_name":"","other_software_stack":{"cuda_version":"13.2.1.009","cuda_driver_version":"595.58.03","nccl_version":"2.29.7","cublas_version":"13.4.0.1","cudnn_version":"9.21.0.82","trt_version":"10.16.1.11","dali_version":"2.0.0","mofed_version":"5.4-rdmacore59.1","openmpi_version":"4.1.7","kernel_version":"Linux 6.8.0-139-generic","nvidia_kernel_driver":"580.173.02"},"operating_system":"Ubuntu 24.04.4 LTS","sw_notes":""}'
+++ srun -N1 -n1 --container-name=llama2_70b_lora_persist_l2l-nemo --no-container-mount-home --container-remap-root --container-writable --container-env=BASH_ENV,ENV bash -c 'echo ":::GITCOMMITID ${GIT_COMMIT_ID} ${LAUNCHER_GIT_COMMIT_ID}"'
++ _GITCOMMIT_CACHED=':::GITCOMMITID  '
+++ seq 1 1
++ for _experiment_index in $(seq 1 "${NEXP}")
++ [[ 0 -eq 1 ]]
+++ date +%s
++ echo 'EXPERIMENT_START 1794849856'
+EXPERIMENT_START 1794849856
++ export _experiment_index
++ tee /work/benchmark/MLPerf/runs/sub_22259_010013/261117010013582288767_1.log
++ echo 'Beginning trial 1 of 1'
+Beginning trial 1 of 1
++ export -p
++ echo ':::DLPAL /scratch/containers/l2l-nemo.sqsh 5017 2 ntu-scc[01-02] ntu-scc NTUSCC16TP2_2x8x1xtp2pp1cp1'
+:::DLPAL /scratch/containers/l2l-nemo.sqsh 5017 2 ntu-scc[01-02] ntu-scc NTUSCC16TP2_2x8x1xtp2pp1cp1
++ [[ 1 -eq 1 ]]
++ echo ':::SYSJSON {"submitter":"UNKNOWN_MLPERF_SUBMITTER","division":"closed","status":"Available on-premise","system_name":"UNKNOWN_MLPERF_SYSTEM_NAME","number_of_nodes":"2","host_processors_per_node":"2","host_processor_model_name":"AMD EPYC 9755 128-Core Processor","host_processor_core_count":"128","host_processor_vcpu_count":"","host_processor_frequency":"","host_processor_caches":"","host_processor_interconnect":"","host_memory_capacity":"1.5 TB","host_storage_type":"","host_storage_capacity":"","host_networking":"","host_networking_topology":"","host_memory_configuration":"","accelerators_per_node":"8","accelerator_model_name":"NVIDIA H200 NVL","accelerator_host_interconnect":"","accelerator_frequency":"","accelerator_on-chip_memories":"","accelerator_memory_configuration":"","accelerator_memory_capacity":"143771 MiB","accelerator_interconnect":"","accelerator_interconnect_topology":"","cooling":"","hw_notes":"","framework":"PyTorch NVIDIA Release 26.04","framework_name":"","other_software_stack":{"cuda_version":"13.2.1.009","cuda_driver_version":"595.58.03","nccl_version":"2.29.7","cublas_version":"13.4.0.1","cudnn_version":"9.21.0.82","trt_version":"10.16.1.11","dali_version":"2.0.0","mofed_version":"5.4-rdmacore59.1","openmpi_version":"4.1.7","kernel_version":"Linux 6.8.0-139-generic","nvidia_kernel_driver":"580.173.02"},"operating_system":"Ubuntu 24.04.4 LTS","sw_notes":""}'
+:::SYSJSON {"submitter":"UNKNOWN_MLPERF_SUBMITTER","division":"closed","status":"Available on-premise","system_name":"UNKNOWN_MLPERF_SYSTEM_NAME","number_of_nodes":"2","host_processors_per_node":"2","host_processor_model_name":"AMD EPYC 9755 128-Core Processor","host_processor_core_count":"128","host_processor_vcpu_count":"","host_processor_frequency":"","host_processor_caches":"","host_processor_interconnect":"","host_memory_capacity":"1.5 TB","host_storage_type":"","host_storage_capacity":"","host_networking":"","host_networking_topology":"","host_memory_configuration":"","accelerators_per_node":"8","accelerator_model_name":"NVIDIA H200 NVL","accelerator_host_interconnect":"","accelerator_frequency":"","accelerator_on-chip_memories":"","accelerator_memory_configuration":"","accelerator_memory_capacity":"143771 MiB","accelerator_interconnect":"","accelerator_interconnect_topology":"","cooling":"","hw_notes":"","framework":"PyTorch NVIDIA Release 26.04","framework_name":"","other_software_stack":{"cuda_version":"13.2.1.009","cuda_driver_version":"595.58.03","nccl_version":"2.29.7","cublas_version":"13.4.0.1","cudnn_version":"9.21.0.82","trt_version":"10.16.1.11","dali_version":"2.0.0","mofed_version":"5.4-rdmacore59.1","openmpi_version":"4.1.7","kernel_version":"Linux 6.8.0-139-generic","nvidia_kernel_driver":"580.173.02"},"operating_system":"Ubuntu 24.04.4 LTS","sw_notes":""}
++ echo ':::GITCOMMITID  '
+:::GITCOMMITID  
++ '[' 1 -eq 1 ']'
++ srun --ntasks-per-node=1 bash -c '
+                 host=$(hostname)
+                 echo "$host sync_start"
+                 sync && echo "$host sync_done"
+                 cache_before=$(awk "/^Cached:/ {print \$2}" /proc/meminfo)
+                 /mnt/opt/systools/drop-caches
+                 cache_after=$(awk "/^Cached:/ {print \$2}" /proc/meminfo)
+                 echo "$host cache_cleared ${cache_before}kB to ${cache_after}kB"
+            '
+ntu-scc01 sync_start
+ntu-scc01 sync_done
+ntu-scc02 sync_start
+ntu-scc02 sync_done
+ntu-scc02: dropped caches: Cached 77515744 kB -> 6778044 kB, Buffers 17092 kB -> 4860 kB, Dirty 64 kB -> 80 kB (caller uid 10001)
+ntu-scc02 cache_cleared 77515744kB to 6777632kB
+ntu-scc01: dropped caches: Cached 79195784 kB -> 7660368 kB, Buffers 90580 kB -> 8844 kB, Dirty 228 kB -> 48 kB (caller uid 10001)
+ntu-scc01 cache_cleared 79195792kB to 7660168kB
++ srun --ntasks-per-node=1 --mpi=none --container-name=llama2_70b_lora_persist_l2l-nemo --no-container-mount-home --container-remap-root --container-writable --container-env=BASH_ENV,ENV python -c '
+from callback_logging import mllogger
+mllogger.event(key=mllogger.constants.CACHE_CLEAR, value=True)'
+/usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:36: UserWarning: transformers version 5.5.4 is not tested with nvidia-modelopt and may cause issues. Please install recommended version with `pip install nvidia-modelopt[hf]` if working with HF models.
+  _warnings.warn(
+/workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/mimo/config/base_configs.py:12: UserWarning: MimoModelConfig is experimental and still under active development. The API may change without notice in future releases.
+  class MimoModelConfig:
+[ERROR] `cache_position` is part of Qwen3ASRThinkerTextModel.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+[ERROR] `cache_position` is part of Qwen3ASRThinkerForConditionalGeneration.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+:::MLLOG {"namespace": "", "time_ms": 1794849891796, "event_type": "POINT_IN_TIME", "key": "cache_clear", "value": true, "metadata": {"file": "<string>", "lineno": 3}}
+/usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:36: UserWarning: transformers version 5.5.4 is not tested with nvidia-modelopt and may cause issues. Please install recommended version with `pip install nvidia-modelopt[hf]` if working with HF models.
+  _warnings.warn(
+/workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/mimo/config/base_configs.py:12: UserWarning: MimoModelConfig is experimental and still under active development. The API may change without notice in future releases.
+  class MimoModelConfig:
+[ERROR] `cache_position` is part of Qwen3ASRThinkerTextModel.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+[ERROR] `cache_position` is part of Qwen3ASRThinkerForConditionalGeneration.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+:::MLLOG {"namespace": "", "time_ms": 1794849898527, "event_type": "POINT_IN_TIME", "key": "cache_clear", "value": true, "metadata": {"file": "<string>", "lineno": 3}}
++ export SEED=22259
++ SEED=22259
++ set +e
+++ date +%s
++ echo 'RUNANDTIME_START 1794849902'
+RUNANDTIME_START 1794849902
++ srun -l --mpi=none --ntasks-per-node=8 --time=300 --container-name=llama2_70b_lora_persist_l2l-nemo --no-container-mount-home --container-remap-root --container-writable --container-env=BASH_ENV,ENV --container-mounts=/work/benchmark/MLPerf/cache:/compile_cache,/work/benchmark/MLPerf/patches/dg_dgrad_autoload.py:/usr/local/lib/python3.12/dist-packages/dg_dgrad_autoload.py:ro,/work/benchmark/MLPerf/patches/zz_dg_dgrad.pth:/usr/local/lib/python3.12/dist-packages/zz_dg_dgrad.pth:ro,/work/benchmark/MLPerf/gemmlib:/work/benchmark/MLPerf/gemmlib,/work/benchmark/MLPerf/attnkernel:/work/benchmark/MLPerf/attnkernel:ro,/work/benchmark/MLPerf/patches:/work/benchmark/MLPerf/patches:ro,/scratch/benchmark/MLPerf/data/dataset/nemo_npy:/data:ro,/scratch/benchmark/MLPerf/data/models/llama2_70b_megatron_bridge:/ckpt:ro,/work/benchmark/MLPerf/runs/sub_22259_010013:/results:rw --container-workdir=/workspace/ft-llm --container-env=MASTER_PORT,MASTER_ADDR,BASH_ENV,ENV slurm2pytorch bash ./run_and_time.sh
+ 3: [DG_DGRAD] dgrad GEMMs -> DeepGEMM in: basic_linear, linear, layernorm_linear, layernorm_mlp, no-fwd-transpose
+ 3: [NTU_FP8_DY_AG] te.ops.ReduceScatter backward: quantize -> FP8 all-gather
+ 3: [NTU_DSWIGLU_DG] te.ops.SwiGLU backward -> fused dSwiGLU + E4M3 1x128 quant (DeepGEMM operand)
+ 3: [NTU_ROPE] FusedQKVRoPEFunc -> Triton RoPE (sbhd, non-interleaved); FP8 attention q/k/v combine without cat
+ 3: [NTU_DG_GRADQ] TE Linear/LayerNormLinear grad output -> E4M3 1x128 DeepGEMM operand (gather: data + scales)
+ 3: [NTU_ATTN_BWD] FP8 attention backward -> /work/benchmark/MLPerf/attnkernel/fp8/libfa3_bwd_fp8.so (size 1488032 mtime 14:46:02 md5 f6e9bb65 perm16 1; TE fused_attn_bwd hooked; bf16 grads, amax_dP/dQKV written)
+ 2: [DG_DGRAD] dgrad GEMMs -> DeepGEMM in: basic_linear, linear, layernorm_linear, layernorm_mlp, no-fwd-transpose
+ 2: [NTU_FP8_DY_AG] te.ops.ReduceScatter backward: quantize -> FP8 all-gather
+ 2: [NTU_DSWIGLU_DG] te.ops.SwiGLU backward -> fused dSwiGLU + E4M3 1x128 quant (DeepGEMM operand)
+ 2: [NTU_ROPE] FusedQKVRoPEFunc -> Triton RoPE (sbhd, non-interleaved); FP8 attention q/k/v combine without cat
+ 2: [NTU_DG_GRADQ] TE Linear/LayerNormLinear grad output -> E4M3 1x128 DeepGEMM operand (gather: data + scales)
+ 2: [NTU_ATTN_BWD] FP8 attention backward -> /work/benchmark/MLPerf/attnkernel/fp8/libfa3_bwd_fp8.so (size 1488032 mtime 14:46:02 md5 f6e9bb65 perm16 1; TE fused_attn_bwd hooked; bf16 grads, amax_dP/dQKV written)
+ 4: [DG_DGRAD] dgrad GEMMs -> DeepGEMM in: basic_linear, linear, layernorm_linear, layernorm_mlp, no-fwd-transpose
+ 4: [NTU_FP8_DY_AG] te.ops.ReduceScatter backward: quantize -> FP8 all-gather
+ 4: [NTU_DSWIGLU_DG] te.ops.SwiGLU backward -> fused dSwiGLU + E4M3 1x128 quant (DeepGEMM operand)
+ 6: [DG_DGRAD] dgrad GEMMs -> DeepGEMM in: basic_linear, linear, layernorm_linear, layernorm_mlp, no-fwd-transpose
+ 6: [NTU_FP8_DY_AG] te.ops.ReduceScatter backward: quantize -> FP8 all-gather
+ 4: [NTU_ROPE] FusedQKVRoPEFunc -> Triton RoPE (sbhd, non-interleaved); FP8 attention q/k/v combine without cat
+ 4: [NTU_DG_GRADQ] TE Linear/LayerNormLinear grad output -> E4M3 1x128 DeepGEMM operand (gather: data + scales)
+ 6: [NTU_DSWIGLU_DG] te.ops.SwiGLU backward -> fused dSwiGLU + E4M3 1x128 quant (DeepGEMM operand)
+ 6: [NTU_ROPE] FusedQKVRoPEFunc -> Triton RoPE (sbhd, non-interleaved); FP8 attention q/k/v combine without cat
+ 6: [NTU_DG_GRADQ] TE Linear/LayerNormLinear grad output -> E4M3 1x128 DeepGEMM operand (gather: data + scales)
+ 4: [NTU_ATTN_BWD] FP8 attention backward -> /work/benchmark/MLPerf/attnkernel/fp8/libfa3_bwd_fp8.so (size 1488032 mtime 14:46:02 md5 f6e9bb65 perm16 1; TE fused_attn_bwd hooked; bf16 grads, amax_dP/dQKV written)
+ 6: [NTU_ATTN_BWD] FP8 attention backward -> /work/benchmark/MLPerf/attnkernel/fp8/libfa3_bwd_fp8.so (size 1488032 mtime 14:46:02 md5 f6e9bb65 perm16 1; TE fused_attn_bwd hooked; bf16 grads, amax_dP/dQKV written)
+ 5: [DG_DGRAD] dgrad GEMMs -> DeepGEMM in: basic_linear, linear, layernorm_linear, layernorm_mlp, no-fwd-transpose
+ 5: [NTU_FP8_DY_AG] te.ops.ReduceScatter backward: quantize -> FP8 all-gather
+ 5: [NTU_DSWIGLU_DG] te.ops.SwiGLU backward -> fused dSwiGLU + E4M3 1x128 quant (DeepGEMM operand)
+ 5: [NTU_ROPE] FusedQKVRoPEFunc -> Triton RoPE (sbhd, non-interleaved); FP8 attention q/k/v combine without cat
+ 5: [NTU_DG_GRADQ] TE Linear/LayerNormLinear grad output -> E4M3 1x128 DeepGEMM operand (gather: data + scales)
+ 5: [NTU_ATTN_BWD] FP8 attention backward -> /work/benchmark/MLPerf/attnkernel/fp8/libfa3_bwd_fp8.so (size 1488032 mtime 14:46:02 md5 f6e9bb65 perm16 1; TE fused_attn_bwd hooked; bf16 grads, amax_dP/dQKV written)
+ 7: [DG_DGRAD] dgrad GEMMs -> DeepGEMM in: basic_linear, linear, layernorm_linear, layernorm_mlp, no-fwd-transpose
+ 7: [NTU_FP8_DY_AG] te.ops.ReduceScatter backward: quantize -> FP8 all-gather
+ 7: [NTU_DSWIGLU_DG] te.ops.SwiGLU backward -> fused dSwiGLU + E4M3 1x128 quant (DeepGEMM operand)
+ 7: [NTU_ROPE] FusedQKVRoPEFunc -> Triton RoPE (sbhd, non-interleaved); FP8 attention q/k/v combine without cat
+ 7: [NTU_DG_GRADQ] TE Linear/LayerNormLinear grad output -> E4M3 1x128 DeepGEMM operand (gather: data + scales)
+ 1: [DG_DGRAD] dgrad GEMMs -> DeepGEMM in: basic_linear, linear, layernorm_linear, layernorm_mlp, no-fwd-transpose
+ 1: [NTU_FP8_DY_AG] te.ops.ReduceScatter backward: quantize -> FP8 all-gather
+ 1: [NTU_DSWIGLU_DG] te.ops.SwiGLU backward -> fused dSwiGLU + E4M3 1x128 quant (DeepGEMM operand)
+ 7: [NTU_ATTN_BWD] FP8 attention backward -> /work/benchmark/MLPerf/attnkernel/fp8/libfa3_bwd_fp8.so (size 1488032 mtime 14:46:02 md5 f6e9bb65 perm16 1; TE fused_attn_bwd hooked; bf16 grads, amax_dP/dQKV written)
+ 1: [NTU_ROPE] FusedQKVRoPEFunc -> Triton RoPE (sbhd, non-interleaved); FP8 attention q/k/v combine without cat
+ 1: [NTU_DG_GRADQ] TE Linear/LayerNormLinear grad output -> E4M3 1x128 DeepGEMM operand (gather: data + scales)
+ 0: [DG_DGRAD] dgrad GEMMs -> DeepGEMM in: basic_linear, linear, layernorm_linear, layernorm_mlp, no-fwd-transpose
+ 0: [NTU_FP8_DY_AG] te.ops.ReduceScatter backward: quantize -> FP8 all-gather
+ 0: [NTU_DSWIGLU_DG] te.ops.SwiGLU backward -> fused dSwiGLU + E4M3 1x128 quant (DeepGEMM operand)
+ 1: [NTU_ATTN_BWD] FP8 attention backward -> /work/benchmark/MLPerf/attnkernel/fp8/libfa3_bwd_fp8.so (size 1488032 mtime 14:46:02 md5 f6e9bb65 perm16 1; TE fused_attn_bwd hooked; bf16 grads, amax_dP/dQKV written)
+ 0: [NTU_ROPE] FusedQKVRoPEFunc -> Triton RoPE (sbhd, non-interleaved); FP8 attention q/k/v combine without cat
+ 0: [NTU_DG_GRADQ] TE Linear/LayerNormLinear grad output -> E4M3 1x128 DeepGEMM operand (gather: data + scales)
+ 0: [NTU_ATTN_BWD] FP8 attention backward -> /work/benchmark/MLPerf/attnkernel/fp8/libfa3_bwd_fp8.so (size 1488032 mtime 14:46:02 md5 f6e9bb65 perm16 1; TE fused_attn_bwd hooked; bf16 grads, amax_dP/dQKV written)
+ 8: [DG_DGRAD] dgrad GEMMs -> DeepGEMM in: basic_linear, linear, layernorm_linear, layernorm_mlp, no-fwd-transpose
+ 9: [DG_DGRAD] dgrad GEMMs -> DeepGEMM in: basic_linear, linear, layernorm_linear, layernorm_mlp, no-fwd-transpose
+10: [DG_DGRAD] dgrad GEMMs -> DeepGEMM in: basic_linear, linear, layernorm_linear, layernorm_mlp, no-fwd-transpose
+11: [DG_DGRAD] dgrad GEMMs -> DeepGEMM in: basic_linear, linear, layernorm_linear, layernorm_mlp, no-fwd-transpose
+13: [DG_DGRAD] dgrad GEMMs -> DeepGEMM in: basic_linear, linear, layernorm_linear, layernorm_mlp, no-fwd-transpose
+14: [DG_DGRAD] dgrad GEMMs -> DeepGEMM in: basic_linear, linear, layernorm_linear, layernorm_mlp, no-fwd-transpose
+15: [DG_DGRAD] dgrad GEMMs -> DeepGEMM in: basic_linear, linear, layernorm_linear, layernorm_mlp, no-fwd-transpose
+10: [NTU_FP8_DY_AG] te.ops.ReduceScatter backward: quantize -> FP8 all-gather
+11: [NTU_FP8_DY_AG] te.ops.ReduceScatter backward: quantize -> FP8 all-gather
+13: [NTU_FP8_DY_AG] te.ops.ReduceScatter backward: quantize -> FP8 all-gather
+ 8: [NTU_FP8_DY_AG] te.ops.ReduceScatter backward: quantize -> FP8 all-gather
+14: [NTU_FP8_DY_AG] te.ops.ReduceScatter backward: quantize -> FP8 all-gather
+15: [NTU_FP8_DY_AG] te.ops.ReduceScatter backward: quantize -> FP8 all-gather
+ 9: [NTU_FP8_DY_AG] te.ops.ReduceScatter backward: quantize -> FP8 all-gather
+10: [NTU_DSWIGLU_DG] te.ops.SwiGLU backward -> fused dSwiGLU + E4M3 1x128 quant (DeepGEMM operand)
+11: [NTU_DSWIGLU_DG] te.ops.SwiGLU backward -> fused dSwiGLU + E4M3 1x128 quant (DeepGEMM operand)
+15: [NTU_DSWIGLU_DG] te.ops.SwiGLU backward -> fused dSwiGLU + E4M3 1x128 quant (DeepGEMM operand)
+ 8: [NTU_DSWIGLU_DG] te.ops.SwiGLU backward -> fused dSwiGLU + E4M3 1x128 quant (DeepGEMM operand)
+ 9: [NTU_DSWIGLU_DG] te.ops.SwiGLU backward -> fused dSwiGLU + E4M3 1x128 quant (DeepGEMM operand)
+13: [NTU_DSWIGLU_DG] te.ops.SwiGLU backward -> fused dSwiGLU + E4M3 1x128 quant (DeepGEMM operand)
+14: [NTU_DSWIGLU_DG] te.ops.SwiGLU backward -> fused dSwiGLU + E4M3 1x128 quant (DeepGEMM operand)
+ 8: [NTU_ROPE] FusedQKVRoPEFunc -> Triton RoPE (sbhd, non-interleaved); FP8 attention q/k/v combine without cat
+ 8: [NTU_DG_GRADQ] TE Linear/LayerNormLinear grad output -> E4M3 1x128 DeepGEMM operand (gather: data + scales)
+ 9: [NTU_ROPE] FusedQKVRoPEFunc -> Triton RoPE (sbhd, non-interleaved); FP8 attention q/k/v combine without cat
+11: [NTU_ROPE] FusedQKVRoPEFunc -> Triton RoPE (sbhd, non-interleaved); FP8 attention q/k/v combine without cat
+13: [NTU_ROPE] FusedQKVRoPEFunc -> Triton RoPE (sbhd, non-interleaved); FP8 attention q/k/v combine without cat
+13: [NTU_DG_GRADQ] TE Linear/LayerNormLinear grad output -> E4M3 1x128 DeepGEMM operand (gather: data + scales)
+15: [NTU_ROPE] FusedQKVRoPEFunc -> Triton RoPE (sbhd, non-interleaved); FP8 attention q/k/v combine without cat
+15: [NTU_DG_GRADQ] TE Linear/LayerNormLinear grad output -> E4M3 1x128 DeepGEMM operand (gather: data + scales)
+ 9: [NTU_DG_GRADQ] TE Linear/LayerNormLinear grad output -> E4M3 1x128 DeepGEMM operand (gather: data + scales)
+10: [NTU_ROPE] FusedQKVRoPEFunc -> Triton RoPE (sbhd, non-interleaved); FP8 attention q/k/v combine without cat
+11: [NTU_DG_GRADQ] TE Linear/LayerNormLinear grad output -> E4M3 1x128 DeepGEMM operand (gather: data + scales)
+14: [NTU_ROPE] FusedQKVRoPEFunc -> Triton RoPE (sbhd, non-interleaved); FP8 attention q/k/v combine without cat
+10: [NTU_DG_GRADQ] TE Linear/LayerNormLinear grad output -> E4M3 1x128 DeepGEMM operand (gather: data + scales)
+14: [NTU_DG_GRADQ] TE Linear/LayerNormLinear grad output -> E4M3 1x128 DeepGEMM operand (gather: data + scales)
+ 9: [NTU_ATTN_BWD] FP8 attention backward -> /work/benchmark/MLPerf/attnkernel/fp8/libfa3_bwd_fp8.so (size 1488032 mtime 14:46:02 md5 f6e9bb65 perm16 1; TE fused_attn_bwd hooked; bf16 grads, amax_dP/dQKV written)
+11: [NTU_ATTN_BWD] FP8 attention backward -> /work/benchmark/MLPerf/attnkernel/fp8/libfa3_bwd_fp8.so (size 1488032 mtime 14:46:02 md5 f6e9bb65 perm16 1; TE fused_attn_bwd hooked; bf16 grads, amax_dP/dQKV written)
+14: [NTU_ATTN_BWD] FP8 attention backward -> /work/benchmark/MLPerf/attnkernel/fp8/libfa3_bwd_fp8.so (size 1488032 mtime 14:46:02 md5 f6e9bb65 perm16 1; TE fused_attn_bwd hooked; bf16 grads, amax_dP/dQKV written)
+ 8: [NTU_ATTN_BWD] FP8 attention backward -> /work/benchmark/MLPerf/attnkernel/fp8/libfa3_bwd_fp8.so (size 1488032 mtime 14:46:02 md5 f6e9bb65 perm16 1; TE fused_attn_bwd hooked; bf16 grads, amax_dP/dQKV written)
+10: [NTU_ATTN_BWD] FP8 attention backward -> /work/benchmark/MLPerf/attnkernel/fp8/libfa3_bwd_fp8.so (size 1488032 mtime 14:46:02 md5 f6e9bb65 perm16 1; TE fused_attn_bwd hooked; bf16 grads, amax_dP/dQKV written)
+15: [NTU_ATTN_BWD] FP8 attention backward -> /work/benchmark/MLPerf/attnkernel/fp8/libfa3_bwd_fp8.so (size 1488032 mtime 14:46:02 md5 f6e9bb65 perm16 1; TE fused_attn_bwd hooked; bf16 grads, amax_dP/dQKV written)
+13: [NTU_ATTN_BWD] FP8 attention backward -> /work/benchmark/MLPerf/attnkernel/fp8/libfa3_bwd_fp8.so (size 1488032 mtime 14:46:02 md5 f6e9bb65 perm16 1; TE fused_attn_bwd hooked; bf16 grads, amax_dP/dQKV written)
+12: [DG_DGRAD] dgrad GEMMs -> DeepGEMM in: basic_linear, linear, layernorm_linear, layernorm_mlp, no-fwd-transpose
+12: [NTU_FP8_DY_AG] te.ops.ReduceScatter backward: quantize -> FP8 all-gather
+12: [NTU_DSWIGLU_DG] te.ops.SwiGLU backward -> fused dSwiGLU + E4M3 1x128 quant (DeepGEMM operand)
+12: [NTU_ROPE] FusedQKVRoPEFunc -> Triton RoPE (sbhd, non-interleaved); FP8 attention q/k/v combine without cat
+12: [NTU_DG_GRADQ] TE Linear/LayerNormLinear grad output -> E4M3 1x128 DeepGEMM operand (gather: data + scales)
+12: [NTU_ATTN_BWD] FP8 attention backward -> /work/benchmark/MLPerf/attnkernel/fp8/libfa3_bwd_fp8.so (size 1488032 mtime 14:46:02 md5 f6e9bb65 perm16 1; TE fused_attn_bwd hooked; bf16 grads, amax_dP/dQKV written)
+ 3: /usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:36: UserWarning: transformers version 5.5.4 is not tested with nvidia-modelopt and may cause issues. Please install recommended version with `pip install nvidia-modelopt[hf]` if working with HF models.
+ 3:   _warnings.warn(
+ 3: [NTU_FUSED_LORA] LoRALinear.forward -> fused output path (qkv: addmm; proj: addmm + B all-gather, no a2a); qkv LoRA on the local sequence shard, FP8 LN all-gather
+ 4: /usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:36: UserWarning: transformers version 5.5.4 is not tested with nvidia-modelopt and may cause issues. Please install recommended version with `pip install nvidia-modelopt[hf]` if working with HF models.
+ 4:   _warnings.warn(
+ 4: [NTU_FUSED_LORA] LoRALinear.forward -> fused output path (qkv: addmm; proj: addmm + B all-gather, no a2a); qkv LoRA on the local sequence shard, FP8 LN all-gather
+ 6: /usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:36: UserWarning: transformers version 5.5.4 is not tested with nvidia-modelopt and may cause issues. Please install recommended version with `pip install nvidia-modelopt[hf]` if working with HF models.
+ 6:   _warnings.warn(
+ 6: [NTU_FUSED_LORA] LoRALinear.forward -> fused output path (qkv: addmm; proj: addmm + B all-gather, no a2a); qkv LoRA on the local sequence shard, FP8 LN all-gather
+ 2: /usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:36: UserWarning: transformers version 5.5.4 is not tested with nvidia-modelopt and may cause issues. Please install recommended version with `pip install nvidia-modelopt[hf]` if working with HF models.
+ 2:   _warnings.warn(
+ 2: [NTU_FUSED_LORA] LoRALinear.forward -> fused output path (qkv: addmm; proj: addmm + B all-gather, no a2a); qkv LoRA on the local sequence shard, FP8 LN all-gather
+ 5: /usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:36: UserWarning: transformers version 5.5.4 is not tested with nvidia-modelopt and may cause issues. Please install recommended version with `pip install nvidia-modelopt[hf]` if working with HF models.
+ 5:   _warnings.warn(
+ 3: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/mimo/config/base_configs.py:12: UserWarning: MimoModelConfig is experimental and still under active development. The API may change without notice in future releases.
+ 3:   class MimoModelConfig:
+ 5: [NTU_FUSED_LORA] LoRALinear.forward -> fused output path (qkv: addmm; proj: addmm + B all-gather, no a2a); qkv LoRA on the local sequence shard, FP8 LN all-gather
+ 1: /usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:36: UserWarning: transformers version 5.5.4 is not tested with nvidia-modelopt and may cause issues. Please install recommended version with `pip install nvidia-modelopt[hf]` if working with HF models.
+ 1:   _warnings.warn(
+ 1: [NTU_FUSED_LORA] LoRALinear.forward -> fused output path (qkv: addmm; proj: addmm + B all-gather, no a2a); qkv LoRA on the local sequence shard, FP8 LN all-gather
+ 3: [ERROR] `cache_position` is part of Qwen3ASRThinkerTextModel.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 3: [ERROR] `cache_position` is part of Qwen3ASRThinkerForConditionalGeneration.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 7: /usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:36: UserWarning: transformers version 5.5.4 is not tested with nvidia-modelopt and may cause issues. Please install recommended version with `pip install nvidia-modelopt[hf]` if working with HF models.
+ 7:   _warnings.warn(
+ 7: [NTU_FUSED_LORA] LoRALinear.forward -> fused output path (qkv: addmm; proj: addmm + B all-gather, no a2a); qkv LoRA on the local sequence shard, FP8 LN all-gather
+ 4: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/mimo/config/base_configs.py:12: UserWarning: MimoModelConfig is experimental and still under active development. The API may change without notice in future releases.
+ 4:   class MimoModelConfig:
+ 6: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/mimo/config/base_configs.py:12: UserWarning: MimoModelConfig is experimental and still under active development. The API may change without notice in future releases.
+ 6:   class MimoModelConfig:
+ 0: /usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:36: UserWarning: transformers version 5.5.4 is not tested with nvidia-modelopt and may cause issues. Please install recommended version with `pip install nvidia-modelopt[hf]` if working with HF models.
+ 0:   _warnings.warn(
+ 0: [NTU_FUSED_LORA] LoRALinear.forward -> fused output path (qkv: addmm; proj: addmm + B all-gather, no a2a); qkv LoRA on the local sequence shard, FP8 LN all-gather
+ 2: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/mimo/config/base_configs.py:12: UserWarning: MimoModelConfig is experimental and still under active development. The API may change without notice in future releases.
+ 2:   class MimoModelConfig:
+ 5: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/mimo/config/base_configs.py:12: UserWarning: MimoModelConfig is experimental and still under active development. The API may change without notice in future releases.
+ 5:   class MimoModelConfig:
+ 1: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/mimo/config/base_configs.py:12: UserWarning: MimoModelConfig is experimental and still under active development. The API may change without notice in future releases.
+ 1:   class MimoModelConfig:
+ 4: [ERROR] `cache_position` is part of Qwen3ASRThinkerTextModel.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 4: [ERROR] `cache_position` is part of Qwen3ASRThinkerForConditionalGeneration.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 6: [ERROR] `cache_position` is part of Qwen3ASRThinkerTextModel.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 6: [ERROR] `cache_position` is part of Qwen3ASRThinkerForConditionalGeneration.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 2: [ERROR] `cache_position` is part of Qwen3ASRThinkerTextModel.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 2: [ERROR] `cache_position` is part of Qwen3ASRThinkerForConditionalGeneration.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 5: [ERROR] `cache_position` is part of Qwen3ASRThinkerTextModel.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 5: [ERROR] `cache_position` is part of Qwen3ASRThinkerForConditionalGeneration.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 1: [ERROR] `cache_position` is part of Qwen3ASRThinkerTextModel.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 1: [ERROR] `cache_position` is part of Qwen3ASRThinkerForConditionalGeneration.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 7: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/mimo/config/base_configs.py:12: UserWarning: MimoModelConfig is experimental and still under active development. The API may change without notice in future releases.
+ 7:   class MimoModelConfig:
+ 0: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/mimo/config/base_configs.py:12: UserWarning: MimoModelConfig is experimental and still under active development. The API may change without notice in future releases.
+ 0:   class MimoModelConfig:
+ 7: [ERROR] `cache_position` is part of Qwen3ASRThinkerTextModel.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 7: [ERROR] `cache_position` is part of Qwen3ASRThinkerForConditionalGeneration.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 0: [ERROR] `cache_position` is part of Qwen3ASRThinkerTextModel.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 0: [ERROR] `cache_position` is part of Qwen3ASRThinkerForConditionalGeneration.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942021, "event_type": "INTERVAL_START", "key": "init_start", "value": null, "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 53}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942023, "event_type": "POINT_IN_TIME", "key": "submission_benchmark", "value": "llama2_70b_lora", "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 54}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942023, "event_type": "POINT_IN_TIME", "key": "submission_org", "value": "NTU", "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 54}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942023, "event_type": "POINT_IN_TIME", "key": "submission_division", "value": "closed", "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 54}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942023, "event_type": "POINT_IN_TIME", "key": "submission_status", "value": "onprem", "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 54}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942023, "event_type": "POINT_IN_TIME", "key": "submission_platform", "value": "2xG494-ZB4_8xH200NVL", "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 54}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942023, "event_type": "POINT_IN_TIME", "key": "target_accuracy", "value": 0.925, "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 55}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942086, "event_type": "POINT_IN_TIME", "key": "lora_rank", "value": 16, "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 120}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942086, "event_type": "POINT_IN_TIME", "key": "lora_alpha", "value": 32, "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 121}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942086, "event_type": "POINT_IN_TIME", "key": "opt_base_learning_rate", "value": 0.0005, "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 147}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942087, "event_type": "POINT_IN_TIME", "key": "opt_adamw_weight_decay", "value": 0.0001, "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 148}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942087, "event_type": "POINT_IN_TIME", "key": "opt_gradient_clip_norm", "value": 0.3, "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 149}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942087, "event_type": "POINT_IN_TIME", "key": "opt_learning_rate_warmup_factor", "value": 0.0, "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 170}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942087, "event_type": "POINT_IN_TIME", "key": "opt_learning_rate_training_steps", "value": 800, "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 183}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942088, "event_type": "POINT_IN_TIME", "key": "gradient_accumulation_steps", "value": 1, "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 190}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942088, "event_type": "POINT_IN_TIME", "key": "global_batch_size", "value": 8, "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 191}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942088, "event_type": "POINT_IN_TIME", "key": "train_samples", "value": 3901, "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 253}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942089, "event_type": "POINT_IN_TIME", "key": "eval_samples", "value": 173, "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 254}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794849942090, "event_type": "POINT_IN_TIME", "key": "seed", "value": 22259, "metadata": {"file": "/workspace/ft-llm/train.py", "lineno": 310}}
+ 0: /workspace/ft-llm/train.py:376: UserWarning: Function 'finetune' is experimental. APIs in this module are subject to change without notice.
+ 0:   finetune(config, utils.forward_step, callbacks=callbacks)
+ 0: /workspace/Megatron-Bridge/src/megatron/bridge/training/finetune.py:53: UserWarning: Function 'pretrain' is experimental. APIs in this module are subject to change without notice.
+ 0:   return pretrain(config, forward_step_func, callbacks=callbacks)
+ 0: 
+ 0: ======================================================================
+ 0: Configuration Summary (Non-Default Values vs Megatron Core)
+ 0: ======================================================================
+ 0: 
+ 0: [optimizer] Non-default values (vs Mcore OptimizerConfig):
+ 0:   bf16: True  (Mcore default: False)
+ 0:   clip_grad: 0.3  (Mcore default: 1.0)
+ 0:   fp8_recipe: 'delayed'  (Mcore default: None)
+ 0:   lr: 0.0005  (Mcore default: None)
+ 0:   min_lr: 0  (Mcore default: None)
+ 0:   params_dtype: torch.bfloat16  (Mcore default: torch.float32)
+ 0:   use_distributed_optimizer: True  (Mcore default: False)
+ 0:   weight_decay: 0.0001  (Mcore default: 0.01)
+ 0: 
+ 0: [ddp] Non-default values (vs Mcore DistributedDataParallelConfig):
+ 0:   bucket_size: 45000000  (Mcore default: None)
+ 0:   overlap_grad_reduce: True  (Mcore default: False)
+ 0:   overlap_param_gather: True  (Mcore default: False)
+ 0:   use_distributed_optimizer: True  (Mcore default: False)
+ 0: 
+ 0: [model] Non-default values (vs Mcore TransformerConfig):
+ 0:   add_bias_linear: False  (Mcore default: True)
+ 0:   apply_rope_fusion: True  (Mcore default: False)
+ 0:   attention_dropout: 0.0  (Mcore default: 0.1)
+ 0:   attention_softmax_in_fp32: False  (Mcore default: True)
+ 0:   autocast_dtype: torch.bfloat16  (Mcore default: None)
+ 0:   bf16: True  (Mcore default: False)
+ 0:   bias_activation_fusion: True  (Mcore default: False)
+ 0:   bias_dropout_fusion: True  (Mcore default: False)
+ 0:   cp_comm_type: 'a2a'  (Mcore default: None)
+ 0:   cpu_offloading_num_layers: 20  (Mcore default: 0)
+ 0:   cross_entropy_fusion_impl: 'te'  (Mcore default: 'native')
+ 0:   cross_entropy_loss_fusion: True  (Mcore default: False)
+ 0:   cuda_graph_scope: []  (Mcore default: 'full')
+ 0:   deallocate_pipeline_outputs: True  (Mcore default: False)
+ 0:   disable_parameter_transpose_cache: True  (Mcore default: False)
+ 0:   embedding_init_method_std: 0.02  (Mcore default: None)
+ 0:   expert_tensor_parallel_size: 2  (Mcore default: None)
+ 0:   ffn_hidden_size: 28672  (Mcore default: None)
+ 0:   fp8: 'hybrid'  (Mcore default: None)
+ 0:   fp8_amax_compute_algo: 'max'  (Mcore default: 'most_recent')
+ 0:   fp8_amax_history_len: 4  (Mcore default: 1)
+ 0:   fp8_dot_product_attention: 1  (Mcore default: False)
+ 0:   fused_single_qkv_rope: 1  (Mcore default: False)
+ 0:   gated_linear_unit: True  (Mcore default: False)
+ 0:   gradient_accumulation_fusion: True  (Mcore default: False)
+ 0:   hidden_dropout: 0.0  (Mcore default: 0.1)
+ 0:   hidden_size: 8192  (Mcore default: 0)
+ 0:   kv_channels: 128  (Mcore default: None)
+ 0:   masked_softmax_fusion: True  (Mcore default: False)
+ 0:   microbatch_group_size_per_vp_stage: 1  (Mcore default: None)
+ 0:   normalization: 'RMSNorm'  (Mcore default: 'LayerNorm')
+ 0:   num_attention_heads: 64  (Mcore default: 0)
+ 0:   num_layers: 80  (Mcore default: 0)
+ 0:   num_layers_at_end_in_bf16: 0  (Mcore default: 1)
+ 0:   num_layers_at_start_in_bf16: 0  (Mcore default: 1)
+ 0:   num_query_groups: 8  (Mcore default: None)
+ 0:   params_dtype: torch.bfloat16  (Mcore default: torch.float32)
+ 0:   persist_layer_norm: True  (Mcore default: False)
+ 0:   recompute_modules: ['core_attn']  (Mcore default: None)
+ 0:   sequence_parallel: 1  (Mcore default: False)
+ 0:   tensor_model_parallel_size: 2  (Mcore default: 1)
+ 0:   use_te_rng_tracker: True  (Mcore default: False)
+ 0: 
+ 0: ----------------------------------------------------------------------
+ 0: Other Configuration Values:
+ 0: ----------------------------------------------------------------------
+ 0: 
+ 0: [train]:
+ 0:   check_optimizer_step_success: False
+ 0:   decrease_batch_size_if_needed: False
+ 0:   empty_unused_memory_level: 0
+ 0:   exit_signal: <Signals.SIGTERM: 15>
+ 0:   exit_signal_handler: False
+ 0:   exit_signal_handler_for_dataloader: False
+ 0:   exit_signal_handler_for_training: False
+ 0:   global_batch_size: 8
+ 0:   iterations_to_skip: []
+ 0:   manual_gc: True
+ 0:   manual_gc_eval: False
+ 0:   manual_gc_interval: 10000
+ 0:   micro_batch_size: 1
+ 0:   skip_sync_grad_norm_across_mp: True
+ 0:   train_iters: 800
+ 0: 
+ 0: [validation]:
+ 0:   eval_global_batch_size: 8
+ 0:   eval_interval: 48
+ 0:   eval_iters: 22
+ 0:   eval_micro_batch_size: 1
+ 0:   full_validation: False
+ 0:   multiple_validation_sets: False
+ 0:   skip_train: False
+ 0:   start_eval_at_iter: 192
+ 0:   test_mode: False
+ 0: 
+ 0: [scheduler]:
+ 0:   end_weight_decay: 0.0001
+ 0:   lr_decay_iters: 800
+ 0:   lr_decay_steps: 6400
+ 0:   lr_decay_style: 'cosine'
+ 0:   lr_warmup_fraction: 0.0
+ 0:   lr_warmup_init: 0.0
+ 0:   lr_warmup_iters: 0
+ 0:   lr_warmup_samples: 0
+ 0:   lr_warmup_steps: 0.0
+ 0:   lr_wsd_decay_style: 'exponential'
+ 0:   override_opt_param_scheduler: False
+ 0:   start_weight_decay: 0.0001
+ 0:   use_checkpoint_opt_param_scheduler: False
+ 0:   wd_incr_steps: 6400
+ 0:   weight_decay_incr_style: 'constant'
+ 0: 
+ 0: [dataset]:
+ 0:   data_sharding: True
+ 0:   dataloader_type: 'batch'
+ 0:   dataset_kwargs: {'return_cu_seqlen': False}
+ 0:   dataset_root: '/data'
+ 0:   do_test: False
+ 0:   do_validation: True
+ 0:   drop_last: True
+ 0:   max_train_samples: 6432
+ 0:   memmap_workers: 1
+ 0:   num_workers: 8
+ 0:   packed_sequence_specs: PackedSequenceSpecs(packed_sequence_size=8192, tokenizer_model_name=None, num_tokenizer_workers=-1, packed_train_data_path=PosixPath('/data/train.npy'), packed_val_data_path=PosixPath('/data/validation.npy'), packed_metadata_path=None, pad_cu_seqlens=False, pad_seq_to_mult=1)
+ 0:   persistent_workers: True
+ 0:   pin_memory: True
+ 0:   seed: 22259
+ 0:   seq_length: 8192
+ 0: 
+ 0: [checkpoint]:
+ 0:   async_ckpt_cpu_priority: 10
+ 0:   async_ckpt_io_priority: 3
+ 0:   async_ckpt_use_cpu_shm: False
+ 0:   async_save: False
+ 0:   async_strategy: 'nvrx'
+ 0:   async_write_results_mp_mode: 'fork'
+ 0:   auto_detect_ckpt_format: False
+ 0:   ckpt_assume_constant_structure: False
+ 0:   ckpt_convert_update_legacy_dist_opt_format: False
+ 0:   ckpt_format: 'torch_dist'
+ 0:   ckpt_fully_parallel_load_exchange_algo: 'broadcast'
+ 0:   ckpt_fully_parallel_load_process_group: 'dp'
+ 0:   ckpt_fully_parallel_save_process_group: 'dp'
+ 0:   dist_ckpt_optim_fully_reshardable: False
+ 0:   dist_ckpt_save_pre_mcore_014: False
+ 0:   dist_ckpt_strictness: 'log_all'
+ 0:   distrib_optim_fully_reshardable_mem_efficient: False
+ 0:   exit_on_missing_checkpoint: False
+ 0:   finetune: True
+ 0:   fully_parallel_load: True
+ 0:   fully_parallel_save: True
+ 0:   load_main_params_from_ckpt: False
+ 0:   load_optim: False
+ 0:   load_rng: False
+ 0:   most_recent_k: -1
+ 0:   non_persistent_local_ckpt_algo: 'fully_parallel'
+ 0:   pretrained_checkpoint: '/ckpt'
+ 0:   replication: False
+ 0:   replication_factor: 2
+ 0:   save_optim: True
+ 0:   save_rng: True
+ 0:   save_tokenizer_assets: True
+ 0:   storage_writers_per_rank: 1
+ 0:   strict_fsdp_dtensor_load: False
+ 0:   use_checkpoint_args: False
+ 0:   use_mp_args_from_checkpoint_args: False
+ 0:   use_persistent_ckpt_worker: True
+ 0:   use_tokenizer_model_from_checkpoint_args: True
+ 0: 
+ 0: [logger]:
+ 0:   barrier_with_L1_time: True
+ 0:   filter_warnings: True
+ 0:   log_device_memory_used: False
+ 0:   log_energy: False
+ 0:   log_interval: 801
+ 0:   log_l2_norm_grad_to_tensorboard: False
+ 0:   log_loss_scale_to_tensorboard: True
+ 0:   log_max_attention_logit: False
+ 0:   log_memory_to_tensorboard: False
+ 0:   log_num_zeros_in_grad: False
+ 0:   log_params_norm: False
+ 0:   log_progress: False
+ 0:   log_runtime_to_tensorboard: False
+ 0:   log_throughput: False
+ 0:   log_throughput_to_tensorboard: False
+ 0:   log_timers_to_tensorboard: False
+ 0:   log_validation_ppl_to_tensorboard: False
+ 0:   log_world_size_to_tensorboard: False
+ 0:   logging_level: 20
+ 0:   runtime_time_unit: 'hours'
+ 0:   set_level_for_all_loggers: False
+ 0:   skip_train_metrics_log: True
+ 0:   tensorboard_log_interval: 1
+ 0:   tensorboard_queue_size: 1000
+ 0:   throughput_window_size: 100
+ 0:   timing_log_level: -1
+ 0:   timing_log_option: 'minmax'
+ 0: 
+ 0: [tokenizer]:
+ 0:   force_system_message: False
+ 0:   hf_tokenizer_kwargs: {'use_fast': True}
+ 0:   sp_tokenizer_kwargs: {}
+ 0:   tiktoken_num_special_tokens: 1000
+ 0:   tokenizer_model: '/ckpt/iter_0000000/tokenizer'
+ 0:   tokenizer_type: 'HuggingFaceTokenizer'
+ 0:   vocab_extra_ids: 0
+ 0: 
+ 0: [rng]:
+ 0:   data_parallel_random_init: False
+ 0:   inference_rng_tracker: False
+ 0:   seed: 22259
+ 0:   te_rng_tracker: True
+ 0: 
+ 0: ======================================================================
+ 0: [2026-11-17 01:25:42,099][megatron.core.num_microbatches_calculator][INFO] - setting number of microbatches to constant 1
+ 0: > initializing torch distributed ...
+ 5: [W1117 01:25:42.317148826 ProcessGroupNCCL.cpp:958] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+ 2: [W1117 01:25:42.369161058 ProcessGroupNCCL.cpp:958] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+ 1: [W1117 01:25:42.468378044 ProcessGroupNCCL.cpp:958] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+ 7: [W1117 01:25:42.468375814 ProcessGroupNCCL.cpp:958] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+ 6: [W1117 01:25:42.539971283 ProcessGroupNCCL.cpp:958] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+ 4: [W1117 01:25:42.674700327 ProcessGroupNCCL.cpp:958] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+ 3: [W1117 01:25:42.839332664 ProcessGroupNCCL.cpp:958] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+10: /usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:36: UserWarning: transformers version 5.5.4 is not tested with nvidia-modelopt and may cause issues. Please install recommended version with `pip install nvidia-modelopt[hf]` if working with HF models.
+10:   _warnings.warn(
+13: /usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:36: UserWarning: transformers version 5.5.4 is not tested with nvidia-modelopt and may cause issues. Please install recommended version with `pip install nvidia-modelopt[hf]` if working with HF models.
+13:   _warnings.warn(
+10: [NTU_FUSED_LORA] LoRALinear.forward -> fused output path (qkv: addmm; proj: addmm + B all-gather, no a2a); qkv LoRA on the local sequence shard, FP8 LN all-gather
+13: [NTU_FUSED_LORA] LoRALinear.forward -> fused output path (qkv: addmm; proj: addmm + B all-gather, no a2a); qkv LoRA on the local sequence shard, FP8 LN all-gather
+11: /usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:36: UserWarning: transformers version 5.5.4 is not tested with nvidia-modelopt and may cause issues. Please install recommended version with `pip install nvidia-modelopt[hf]` if working with HF models.
+11:   _warnings.warn(
+11: [NTU_FUSED_LORA] LoRALinear.forward -> fused output path (qkv: addmm; proj: addmm + B all-gather, no a2a); qkv LoRA on the local sequence shard, FP8 LN all-gather
+14: /usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:36: UserWarning: transformers version 5.5.4 is not tested with nvidia-modelopt and may cause issues. Please install recommended version with `pip install nvidia-modelopt[hf]` if working with HF models.
+14:   _warnings.warn(
+15: /usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:36: UserWarning: transformers version 5.5.4 is not tested with nvidia-modelopt and may cause issues. Please install recommended version with `pip install nvidia-modelopt[hf]` if working with HF models.
+15:   _warnings.warn(
+14: [NTU_FUSED_LORA] LoRALinear.forward -> fused output path (qkv: addmm; proj: addmm + B all-gather, no a2a); qkv LoRA on the local sequence shard, FP8 LN all-gather
+15: [NTU_FUSED_LORA] LoRALinear.forward -> fused output path (qkv: addmm; proj: addmm + B all-gather, no a2a); qkv LoRA on the local sequence shard, FP8 LN all-gather
+12: /usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:36: UserWarning: transformers version 5.5.4 is not tested with nvidia-modelopt and may cause issues. Please install recommended version with `pip install nvidia-modelopt[hf]` if working with HF models.
+12:   _warnings.warn(
+12: [NTU_FUSED_LORA] LoRALinear.forward -> fused output path (qkv: addmm; proj: addmm + B all-gather, no a2a); qkv LoRA on the local sequence shard, FP8 LN all-gather
+ 9: /usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:36: UserWarning: transformers version 5.5.4 is not tested with nvidia-modelopt and may cause issues. Please install recommended version with `pip install nvidia-modelopt[hf]` if working with HF models.
+ 9:   _warnings.warn(
+ 8: /usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:36: UserWarning: transformers version 5.5.4 is not tested with nvidia-modelopt and may cause issues. Please install recommended version with `pip install nvidia-modelopt[hf]` if working with HF models.
+ 8:   _warnings.warn(
+ 9: [NTU_FUSED_LORA] LoRALinear.forward -> fused output path (qkv: addmm; proj: addmm + B all-gather, no a2a); qkv LoRA on the local sequence shard, FP8 LN all-gather
+ 8: [NTU_FUSED_LORA] LoRALinear.forward -> fused output path (qkv: addmm; proj: addmm + B all-gather, no a2a); qkv LoRA on the local sequence shard, FP8 LN all-gather
+10: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/mimo/config/base_configs.py:12: UserWarning: MimoModelConfig is experimental and still under active development. The API may change without notice in future releases.
+10:   class MimoModelConfig:
+13: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/mimo/config/base_configs.py:12: UserWarning: MimoModelConfig is experimental and still under active development. The API may change without notice in future releases.
+13:   class MimoModelConfig:
+11: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/mimo/config/base_configs.py:12: UserWarning: MimoModelConfig is experimental and still under active development. The API may change without notice in future releases.
+11:   class MimoModelConfig:
+14: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/mimo/config/base_configs.py:12: UserWarning: MimoModelConfig is experimental and still under active development. The API may change without notice in future releases.
+14:   class MimoModelConfig:
+15: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/mimo/config/base_configs.py:12: UserWarning: MimoModelConfig is experimental and still under active development. The API may change without notice in future releases.
+15:   class MimoModelConfig:
+10: [ERROR] `cache_position` is part of Qwen3ASRThinkerTextModel.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+10: [ERROR] `cache_position` is part of Qwen3ASRThinkerForConditionalGeneration.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+13: [ERROR] `cache_position` is part of Qwen3ASRThinkerTextModel.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+13: [ERROR] `cache_position` is part of Qwen3ASRThinkerForConditionalGeneration.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+12: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/mimo/config/base_configs.py:12: UserWarning: MimoModelConfig is experimental and still under active development. The API may change without notice in future releases.
+12:   class MimoModelConfig:
+11: [ERROR] `cache_position` is part of Qwen3ASRThinkerTextModel.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+11: [ERROR] `cache_position` is part of Qwen3ASRThinkerForConditionalGeneration.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 9: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/mimo/config/base_configs.py:12: UserWarning: MimoModelConfig is experimental and still under active development. The API may change without notice in future releases.
+ 9:   class MimoModelConfig:
+ 8: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/mimo/config/base_configs.py:12: UserWarning: MimoModelConfig is experimental and still under active development. The API may change without notice in future releases.
+ 8:   class MimoModelConfig:
+14: [ERROR] `cache_position` is part of Qwen3ASRThinkerTextModel.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+14: [ERROR] `cache_position` is part of Qwen3ASRThinkerForConditionalGeneration.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+15: [ERROR] `cache_position` is part of Qwen3ASRThinkerTextModel.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+15: [ERROR] `cache_position` is part of Qwen3ASRThinkerForConditionalGeneration.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+12: [ERROR] `cache_position` is part of Qwen3ASRThinkerTextModel.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+12: [ERROR] `cache_position` is part of Qwen3ASRThinkerForConditionalGeneration.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 9: [ERROR] `cache_position` is part of Qwen3ASRThinkerTextModel.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 9: [ERROR] `cache_position` is part of Qwen3ASRThinkerForConditionalGeneration.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 8: [ERROR] `cache_position` is part of Qwen3ASRThinkerTextModel.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+ 8: [ERROR] `cache_position` is part of Qwen3ASRThinkerForConditionalGeneration.forward's signature, but not documented. Make sure to add it to the docstring of the function in /workspace/Megatron-Bridge/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/modeling_qwen3_asr.py.
+13: [W1117 01:25:47.789219663 ProcessGroupNCCL.cpp:958] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+10: [W1117 01:25:47.802140219 ProcessGroupNCCL.cpp:958] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+11: [W1117 01:25:47.897437029 ProcessGroupNCCL.cpp:958] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+15: [W1117 01:25:47.929913709 ProcessGroupNCCL.cpp:958] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+14: [W1117 01:25:47.930760557 ProcessGroupNCCL.cpp:958] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+12: [W1117 01:25:47.935721596 ProcessGroupNCCL.cpp:958] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+ 9: [W1117 01:25:47.936647673 ProcessGroupNCCL.cpp:958] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+ 8: [W1117 01:25:47.952445399 ProcessGroupNCCL.cpp:958] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+ 0: [W1117 01:25:47.754933700 ProcessGroupNCCL.cpp:958] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+ 0: > initialized tensor model parallel with size 2
+ 0: > initialized pipeline model parallel with size 1
+ 0: > setting random seeds to 22259 ...
+ 0: > compiling dataset index builder ...
+ 0: make: Entering directory '/workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/datasets'
+ 8: > compiling dataset index builder ...
+ 8: make: Entering directory '/workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/datasets'
+ 0: make: Nothing to be done for 'default'.
+ 0: make: Leaving directory '/workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/datasets'
+ 0: >>> done with dataset index builder. Compilation time: 0.061 seconds
+ 0: /usr/local/lib/python3.12/dist-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+ 0:   return func(*args, **kwargs)
+ 8: make: Nothing to be done for 'default'.
+ 8: make: Leaving directory '/workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/datasets'
+ 8: >>> done with dataset index builder. Compilation time: 0.083 seconds
+ 1: /usr/local/lib/python3.12/dist-packages/torch/utils/_config_module.py:540: FutureWarning: torch._dynamo.config.skip_code_recursive_on_recompile_limit_hit is deprecated and does not do anything. It will be removed in a future version of PyTorch.
+ 1:   config[key] = copy.deepcopy(getattr(self, key))
+ 4: /usr/local/lib/python3.12/dist-packages/torch/utils/_config_module.py:540: FutureWarning: torch._dynamo.config.skip_code_recursive_on_recompile_limit_hit is deprecated and does not do anything. It will be removed in a future version of PyTorch.
+ 4:   config[key] = copy.deepcopy(getattr(self, key))
+ 6: /usr/local/lib/python3.12/dist-packages/torch/utils/_config_module.py:540: FutureWarning: torch._dynamo.config.skip_code_recursive_on_recompile_limit_hit is deprecated and does not do anything. It will be removed in a future version of PyTorch.
+ 6:   config[key] = copy.deepcopy(getattr(self, key))
+ 5: /usr/local/lib/python3.12/dist-packages/torch/utils/_config_module.py:540: FutureWarning: torch._dynamo.config.skip_code_recursive_on_recompile_limit_hit is deprecated and does not do anything. It will be removed in a future version of PyTorch.
+ 5:   config[key] = copy.deepcopy(getattr(self, key))
+ 0: /usr/local/lib/python3.12/dist-packages/torch/utils/_config_module.py:540: FutureWarning: torch._dynamo.config.skip_code_recursive_on_recompile_limit_hit is deprecated and does not do anything. It will be removed in a future version of PyTorch.
+ 0:   config[key] = copy.deepcopy(getattr(self, key))
+ 2: /usr/local/lib/python3.12/dist-packages/torch/utils/_config_module.py:540: FutureWarning: torch._dynamo.config.skip_code_recursive_on_recompile_limit_hit is deprecated and does not do anything. It will be removed in a future version of PyTorch.
+ 2:   config[key] = copy.deepcopy(getattr(self, key))
+ 3: /usr/local/lib/python3.12/dist-packages/torch/utils/_config_module.py:540: FutureWarning: torch._dynamo.config.skip_code_recursive_on_recompile_limit_hit is deprecated and does not do anything. It will be removed in a future version of PyTorch.
+ 3:   config[key] = copy.deepcopy(getattr(self, key))
+ 7: /usr/local/lib/python3.12/dist-packages/torch/utils/_config_module.py:540: FutureWarning: torch._dynamo.config.skip_code_recursive_on_recompile_limit_hit is deprecated and does not do anything. It will be removed in a future version of PyTorch.
+ 7:   config[key] = copy.deepcopy(getattr(self, key))
+14: /usr/local/lib/python3.12/dist-packages/torch/utils/_config_module.py:540: FutureWarning: torch._dynamo.config.skip_code_recursive_on_recompile_limit_hit is deprecated and does not do anything. It will be removed in a future version of PyTorch.
+14:   config[key] = copy.deepcopy(getattr(self, key))
+12: /usr/local/lib/python3.12/dist-packages/torch/utils/_config_module.py:540: FutureWarning: torch._dynamo.config.skip_code_recursive_on_recompile_limit_hit is deprecated and does not do anything. It will be removed in a future version of PyTorch.
+12:   config[key] = copy.deepcopy(getattr(self, key))
+ 9: /usr/local/lib/python3.12/dist-packages/torch/utils/_config_module.py:540: FutureWarning: torch._dynamo.config.skip_code_recursive_on_recompile_limit_hit is deprecated and does not do anything. It will be removed in a future version of PyTorch.
+ 9:   config[key] = copy.deepcopy(getattr(self, key))
+15: /usr/local/lib/python3.12/dist-packages/torch/utils/_config_module.py:540: FutureWarning: torch._dynamo.config.skip_code_recursive_on_recompile_limit_hit is deprecated and does not do anything. It will be removed in a future version of PyTorch.
+15:   config[key] = copy.deepcopy(getattr(self, key))
+11: /usr/local/lib/python3.12/dist-packages/torch/utils/_config_module.py:540: FutureWarning: torch._dynamo.config.skip_code_recursive_on_recompile_limit_hit is deprecated and does not do anything. It will be removed in a future version of PyTorch.
+11:   config[key] = copy.deepcopy(getattr(self, key))
+ 8: /usr/local/lib/python3.12/dist-packages/torch/utils/_config_module.py:540: FutureWarning: torch._dynamo.config.skip_code_recursive_on_recompile_limit_hit is deprecated and does not do anything. It will be removed in a future version of PyTorch.
+ 8:   config[key] = copy.deepcopy(getattr(self, key))
+13: /usr/local/lib/python3.12/dist-packages/torch/utils/_config_module.py:540: FutureWarning: torch._dynamo.config.skip_code_recursive_on_recompile_limit_hit is deprecated and does not do anything. It will be removed in a future version of PyTorch.
+13:   config[key] = copy.deepcopy(getattr(self, key))
+10: /usr/local/lib/python3.12/dist-packages/torch/utils/_config_module.py:540: FutureWarning: torch._dynamo.config.skip_code_recursive_on_recompile_limit_hit is deprecated and does not do anything. It will be removed in a future version of PyTorch.
+10:   config[key] = copy.deepcopy(getattr(self, key))
+ 0: time to initialize megatron (seconds): 46.503
+ 0: /usr/local/lib/python3.12/dist-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+ 0:   return func(*args, **kwargs)
+ 0: [after megatron is initialized] datetime: 2026-11-17 01:26:27 
+ 0: [after tokenizer is built] datetime: 2026-11-17 01:26:27 
+ 0: Registered PEFT pre-wrap hook
+ 0: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:209: UserWarning: The fp8 argument in "get_gpt_layer_with_transformer_engine_spec" has been deprecated and will be removed soon. Please update your code accordingly.
+ 0:   warnings.warn(
+ 1: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:209: UserWarning: The fp8 argument in "get_gpt_layer_with_transformer_engine_spec" has been deprecated and will be removed soon. Please update your code accordingly.
+ 1:   warnings.warn(
+ 3: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:209: UserWarning: The fp8 argument in "get_gpt_layer_with_transformer_engine_spec" has been deprecated and will be removed soon. Please update your code accordingly.
+ 3:   warnings.warn(
+ 4: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:209: UserWarning: The fp8 argument in "get_gpt_layer_with_transformer_engine_spec" has been deprecated and will be removed soon. Please update your code accordingly.
+ 4:   warnings.warn(
+ 6: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:209: UserWarning: The fp8 argument in "get_gpt_layer_with_transformer_engine_spec" has been deprecated and will be removed soon. Please update your code accordingly.
+ 6:   warnings.warn(
+ 5: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:209: UserWarning: The fp8 argument in "get_gpt_layer_with_transformer_engine_spec" has been deprecated and will be removed soon. Please update your code accordingly.
+ 5:   warnings.warn(
+ 7: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:209: UserWarning: The fp8 argument in "get_gpt_layer_with_transformer_engine_spec" has been deprecated and will be removed soon. Please update your code accordingly.
+ 7:   warnings.warn(
+ 0:  > padded vocab (size: 32000) with 0 dummy tokens (new size: 32000)
+12: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:209: UserWarning: The fp8 argument in "get_gpt_layer_with_transformer_engine_spec" has been deprecated and will be removed soon. Please update your code accordingly.
+12:   warnings.warn(
+13: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:209: UserWarning: The fp8 argument in "get_gpt_layer_with_transformer_engine_spec" has been deprecated and will be removed soon. Please update your code accordingly.
+13:   warnings.warn(
+14: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:209: UserWarning: The fp8 argument in "get_gpt_layer_with_transformer_engine_spec" has been deprecated and will be removed soon. Please update your code accordingly.
+14:   warnings.warn(
+15: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:209: UserWarning: The fp8 argument in "get_gpt_layer_with_transformer_engine_spec" has been deprecated and will be removed soon. Please update your code accordingly.
+15:   warnings.warn(
+ 8: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:209: UserWarning: The fp8 argument in "get_gpt_layer_with_transformer_engine_spec" has been deprecated and will be removed soon. Please update your code accordingly.
+ 8:   warnings.warn(
+ 9: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:209: UserWarning: The fp8 argument in "get_gpt_layer_with_transformer_engine_spec" has been deprecated and will be removed soon. Please update your code accordingly.
+ 9:   warnings.warn(
+11: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:209: UserWarning: The fp8 argument in "get_gpt_layer_with_transformer_engine_spec" has been deprecated and will be removed soon. Please update your code accordingly.
+11:   warnings.warn(
+ 2: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:209: UserWarning: The fp8 argument in "get_gpt_layer_with_transformer_engine_spec" has been deprecated and will be removed soon. Please update your code accordingly.
+ 2:   warnings.warn(
+10: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:209: UserWarning: The fp8 argument in "get_gpt_layer_with_transformer_engine_spec" has been deprecated and will be removed soon. Please update your code accordingly.
+10:   warnings.warn(
+ 0: Applying PEFT pre-wrap hook...
+ 0: Loading base model weights from: /ckpt
+ 0: Broadcasting TrainState from rank 0 to all 16 ranks
+ 0:  Auto-detected checkpoint format as 'torch_dist' from /ckpt/iter_0000000.
+ 0: Broadcasting config from rank 0 to all 16 ranks
+ 0: (TP, PP) mismatch after resume ((2, 1) vs (1, 1) from checkpoint): RNG state will be ignored
+ 0: sharded_state_dict metadata loaded from the checkpoint: {'chained_optim_avoid_prefix': True, 'singleton_local_shards': False}
+ 0: (TP, PP) mismatch after resume ((2, 1) vs (1, 1) from checkpoint): Rerun state will be ignored
+ 0:  Auto-detected checkpoint format as 'torch_dist' from /ckpt/iter_0000000.
+ 0:  loading distributed checkpoint from /ckpt at iteration 0
+13: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/logger.py:90: UserWarning: The argument order of load has been changed. Please check the document to avoid future breakages.
+13:   result = func(*args, **kwargs)
+ 3: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/logger.py:90: UserWarning: The argument order of load has been changed. Please check the document to avoid future breakages.
+ 3:   result = func(*args, **kwargs)
+15: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/logger.py:90: UserWarning: The argument order of load has been changed. Please check the document to avoid future breakages.
+15:   result = func(*args, **kwargs)
+ 3: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/utils.py:481: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.
+ 3:   return func(args[0], **kwargs)
+15: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/utils.py:481: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.
+15:   return func(args[0], **kwargs)
+13: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/utils.py:481: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.
+13:   return func(args[0], **kwargs)
+ 1: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/logger.py:90: UserWarning: The argument order of load has been changed. Please check the document to avoid future breakages.
+ 1:   result = func(*args, **kwargs)
+ 5: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/logger.py:90: UserWarning: The argument order of load has been changed. Please check the document to avoid future breakages.
+ 5:   result = func(*args, **kwargs)
+ 1: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/utils.py:481: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.
+ 1:   return func(args[0], **kwargs)
+ 9: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/logger.py:90: UserWarning: The argument order of load has been changed. Please check the document to avoid future breakages.
+ 9:   result = func(*args, **kwargs)
+11: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/logger.py:90: UserWarning: The argument order of load has been changed. Please check the document to avoid future breakages.
+11:   result = func(*args, **kwargs)
+11: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/utils.py:481: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.
+11:   return func(args[0], **kwargs)
+ 5: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/utils.py:481: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.
+ 5:   return func(args[0], **kwargs)
+ 9: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/utils.py:481: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.
+ 9:   return func(args[0], **kwargs)
+ 7: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/logger.py:90: UserWarning: The argument order of load has been changed. Please check the document to avoid future breakages.
+ 7:   result = func(*args, **kwargs)
+ 7: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/utils.py:481: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.
+ 7:   return func(args[0], **kwargs)
+14: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/logger.py:90: UserWarning: The argument order of load has been changed. Please check the document to avoid future breakages.
+14:   result = func(*args, **kwargs)
+ 4: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/logger.py:90: UserWarning: The argument order of load has been changed. Please check the document to avoid future breakages.
+ 4:   result = func(*args, **kwargs)
+ 8: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/logger.py:90: UserWarning: The argument order of load has been changed. Please check the document to avoid future breakages.
+ 8:   result = func(*args, **kwargs)
+ 6: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/logger.py:90: UserWarning: The argument order of load has been changed. Please check the document to avoid future breakages.
+ 6:   result = func(*args, **kwargs)
+12: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/logger.py:90: UserWarning: The argument order of load has been changed. Please check the document to avoid future breakages.
+12:   result = func(*args, **kwargs)
+ 4: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/utils.py:481: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.
+ 4:   return func(args[0], **kwargs)
+14: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/utils.py:481: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.
+14:   return func(args[0], **kwargs)
+ 6: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/utils.py:481: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.
+ 6:   return func(args[0], **kwargs)
+ 8: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/utils.py:481: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.
+ 8:   return func(args[0], **kwargs)
+12: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/utils.py:481: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.
+12:   return func(args[0], **kwargs)
+10: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/logger.py:90: UserWarning: The argument order of load has been changed. Please check the document to avoid future breakages.
+10:   result = func(*args, **kwargs)
+10: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/utils.py:481: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.
+10:   return func(args[0], **kwargs)
+ 2: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/logger.py:90: UserWarning: The argument order of load has been changed. Please check the document to avoid future breakages.
+ 2:   result = func(*args, **kwargs)
+ 2: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/utils.py:481: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.
+ 2:   return func(args[0], **kwargs)
+15: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/planner_helpers.py:489: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+15:   device = getattr(value, "device", None)
+13: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/planner_helpers.py:489: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+13:   device = getattr(value, "device", None)
+15: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/default_planner.py:499: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+15:   and md.size != obj.size()
+11: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/planner_helpers.py:489: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+11:   device = getattr(value, "device", None)
+13: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/default_planner.py:499: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+13:   and md.size != obj.size()
+ 5: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/planner_helpers.py:489: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 5:   device = getattr(value, "device", None)
+11: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/default_planner.py:499: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+11:   and md.size != obj.size()
+ 9: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/planner_helpers.py:489: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 9:   device = getattr(value, "device", None)
+ 5: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/default_planner.py:499: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 5:   and md.size != obj.size()
+ 9: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/default_planner.py:499: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 9:   and md.size != obj.size()
+ 7: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/planner_helpers.py:489: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 7:   device = getattr(value, "device", None)
+ 7: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/default_planner.py:499: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 7:   and md.size != obj.size()
+ 1: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/planner_helpers.py:489: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 1:   device = getattr(value, "device", None)
+ 3: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/planner_helpers.py:489: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 3:   device = getattr(value, "device", None)
+ 3: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/default_planner.py:499: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 3:   and md.size != obj.size()
+ 1: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/default_planner.py:499: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 1:   and md.size != obj.size()
+ 0: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/logger.py:90: UserWarning: The argument order of load has been changed. Please check the document to avoid future breakages.
+ 0:   result = func(*args, **kwargs)
+ 0: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/utils.py:481: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.
+ 0:   return func(args[0], **kwargs)
+14: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/planner_helpers.py:489: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+14:   device = getattr(value, "device", None)
+ 4: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/planner_helpers.py:489: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 4:   device = getattr(value, "device", None)
+14: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/default_planner.py:499: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+14:   and md.size != obj.size()
+12: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/planner_helpers.py:489: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+12:   device = getattr(value, "device", None)
+ 4: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/default_planner.py:499: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 4:   and md.size != obj.size()
+ 6: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/planner_helpers.py:489: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 6:   device = getattr(value, "device", None)
+ 8: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/planner_helpers.py:489: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 8:   device = getattr(value, "device", None)
+12: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/default_planner.py:499: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+12:   and md.size != obj.size()
+ 6: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/default_planner.py:499: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 6:   and md.size != obj.size()
+ 8: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/default_planner.py:499: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 8:   and md.size != obj.size()
+10: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/planner_helpers.py:489: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+10:   device = getattr(value, "device", None)
+10: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/default_planner.py:499: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+10:   and md.size != obj.size()
+ 2: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/planner_helpers.py:489: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 2:   device = getattr(value, "device", None)
+ 2: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/default_planner.py:499: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 2:   and md.size != obj.size()
+ 0: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/planner_helpers.py:489: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 0:   device = getattr(value, "device", None)
+ 0: /usr/local/lib/python3.12/dist-packages/torch/distributed/checkpoint/default_planner.py:499: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 0:   and md.size != obj.size()
+ 0:  checkpoint version 3.0
+ 0:   successfully loaded checkpoint from /ckpt [ t 0/2, p 0/1 ] at iteration 0
+ 0: Applying PEFT transformation...
+ 1:  > number of parameters on (tensor, pipeline) model parallel rank (1, 0): 34511265792
+ 0: PEFT Statistics:
+ 0:   Total parameters: 34,511,265,792
+ 0:   Trainable parameters: 22,282,240
+ 0:   Trainable percentage: 0.06%
+ 0:  > number of parameters on (tensor, pipeline) model parallel rank (0, 0): 34511265792
+ 0: [2026-11-17 01:27:13,754][megatron.core.distributed.distributed_data_parallel][INFO] - Setting up DistributedDataParallel with config DistributedDataParallelConfig(grad_reduce_in_fp32=False, overlap_grad_reduce=True, overlap_param_gather=True, align_param_gather=False, use_distributed_optimizer=True, num_distributed_optimizer_instances=1, check_for_nan_in_grad=False, check_for_large_grads=False, bucket_size=45000000, pad_buckets_for_high_nccl_busbw=False, reduce_scatter_with_fp32_accumulation=False, param_name_patterns_for_fp32_local_accumulation=(), average_in_collective=False, fp8_param_gather=False, fp4_param_gather=False, reuse_grad_buf_for_mxfp8_param_ag=False, use_megatron_fsdp=False, use_custom_fsdp=False, data_parallel_sharding_strategy='no_shard', gradient_reduce_div_fusion=True, suggested_communication_unit_size=None, keep_fp8_transpose_cache=False, nccl_ub=False, fsdp_double_buffer=False, fsdp_db_use_persist_buf_on_alloc_fail=False, fsdp_all_gather_in_start_param_sync=True, outer_dp_sharding_strate
+ 0: gy='no_shard', disable_symmetric_registration=False, fsdp_manual_registration=False, delay_wgrad_compute=False, megatron_fsdp_main_params_dtype=torch.float32, megatron_fsdp_main_grads_dtype=None, megatron_fsdp_grad_comm_dtype=None, megatron_fsdp_use_decoupled_grad=False)
+ 0: [2026-11-17 01:27:13,795][megatron.core.optimizer][INFO] - Setting up optimizer with config OptimizerConfig(lr=0.0005, min_lr=0, decoupled_lr=None, decoupled_min_lr=None, weight_decay=0.0001, apply_wd_to_qk_layernorm=False, fp8_recipe='delayed', fp16=False, bf16=True, reuse_grad_buf_for_mxfp8_param_ag=False, params_dtype=torch.bfloat16, use_precision_aware_optimizer=False, store_param_remainders=True, main_grads_dtype=torch.float32, main_params_dtype=torch.float32, exp_avg_dtype=torch.float32, exp_avg_sq_dtype=torch.float32, optimizer='adam', loss_scale=None, initial_loss_scale=4294967296, min_loss_scale=1.0, loss_scale_window=1000, hysteresis=2, adam_beta1=0.9, adam_beta2=0.999, adam_eps=1e-08, decoupled_weight_decay=True, sgd_momentum=0.9, muon_momentum=0.95, muon_split_qkv=True, muon_nesterov=False, muon_scale_mode='spectral', muon_fp32_matmul_prec='medium', muon_coefficient_type='quintic', muon_num_ns_steps=5, muon_tp_mode='blockwise', muon_extra_scale_factor=1.0, muon_scalar_optimizer='adam', lion_beta1=
+ 0: 0.95, lion_beta2=0.98, soap_shampoo_beta=0.95, soap_precondition_frequency=1, soap_use_kl_shampoo=True, adaptive_muon_moment2_method='adamuon', adaptive_muon_beta2=0.95, adaptive_muon_eps=1e-08, use_distributed_optimizer=True, use_layer_wise_distributed_optimizer=False, overlap_param_gather=False, overlap_param_gather_with_optimizer_step=False, optimizer_cpu_offload=False, optimizer_offload_fraction=0.0, use_torch_optimizer_for_cpu_offload=False, overlap_cpu_optimizer_d2h_h2d=False, pin_cpu_grads=True, pin_cpu_params=True, clip_grad=0.3, log_num_zeros_in_grad=False, barrier_with_L1_time=False, timers=<megatron.core.timers.Timers object at 0x7f60e494a420>, config_logger_dir='', optimizer_cuda_graph=False)
+ 0: [after model, optimizer, and learning rate scheduler are built] datetime: 2026-11-17 01:27:13 
+ 0: 
+ 0: MCore config:
+ 0: GPTModelProvider(tensor_model_parallel_size=2,
+ 0:                  pipeline_model_parallel_comm_backend=None,
+ 0:                  pipeline_model_parallel_size=1,
+ 0:                  virtual_pipeline_model_parallel_size=None,
+ 0:                  sequence_parallel=1,
+ 0:                  context_parallel_size=1,
+ 0:                  hierarchical_context_parallel_sizes=None,
+ 0:                  max_seqlen_per_dp_cp_rank=None,
+ 0:                  hybrid_context_parallel=False,
+ 0:                  expert_model_parallel_size=1,
+ 0:                  expert_tensor_parallel_size=2,
+ 0:                  perform_initialization=True,
+ 0:                  use_cpu_initialization=False,
+ 0:                  fp16=False,
+ 0:                  bf16=True,
+ 0:                  params_dtype=torch.bfloat16,
+ 0:                  timers=<megatron.core.timers.Timers object at 0x7f60e494a420>,
+ 0:                  finalize_model_grads_func=functools.partial(<function finalize_model_grads at 0x7f6146a9bec0>, pg_collection=ProcessGroupCollection(tp(2), pp(1), mp(2), embd(1), pos_embd(1), cp(1), tp_cp(2), hcp(None), ep(1), expt_tp(2), tp_ep(2), tp_ep_pp(2), tp_dp_cp(16), dp(8), dp_cp(8), dp_cp_ag(None), expt_dp(8), expt_dp_ag(None), intra_dp_cp(8), intra_expt_dp(8), inter_dist_opt(None), intra_dist_opt(16))),
+ 0:                  grad_scale_func=<bound method MegatronOptimizer.scale_loss of <megatron.core.optimizer.optimizer.ChainedOptimizer object at 0x7f60e4899700>>,
+ 0:                  no_sync_func=<bound method DistributedDataParallel.no_sync of DistributedDataParallel(
+ 0:   (module): Float16Module(
+ 0:     (module): GPTModel(
+ 0:       (embedding): LanguageModelEmbedding(
+ 0:         (word_embeddings): VocabParallelEmbedding()
+ 0:         (embedding_dropout): Dropout(p=0.0, inplace=False)
+ 0:       )
+ 0:       (rotary_pos_emb): RotaryEmbedding()
+ 0:       (decoder): TransformerBlock(
+ 0:         (layers): ModuleList(
+ 0:           (0-79): 80 x TransformerLayer(
+ 0:             (input_layernorm): IdentityOp()
+ 0:             (self_attention): SelfAttention(
+ 0:               (core_attention): TEDotProductAttention(
+ 0:                 (flash_attention): FlashAttention()
+ 0:                 (fused_attention): FusedAttention()
+ 0:                 (unfused_attention): UnfusedDotProductAttention(
+ 0:                   (scale_mask_softmax): FusedScaleMaskSoftmax()
+ 0:                   (attention_dropout): Dropout(p=0.0, inplace=False)
+ 0:                 )
+ 0:               )
+ 0:               (linear_proj): LoRALinear(
+ 0:                 (to_wrap): TERowParallelLinear(in_features=4096, out_features=8192, bias=False, TP=2)
+ 0:                 (adapter): ParallelLinearAdapter(
+ 0:                   (activation): Identity()
+ 0:                   (linear_in): RowParallelLinear(in_features=8192, out_features=16, bias=False, TP=2)
+ 0:                   (linear_out): ColumnParallelLinear(in_features=16, out_features=8192, bias=False, TP=2)
+ 0:                   (dropout): Dropout(p=0.1, inplace=False)
+ 0:                 )
+ 0:               )
+ 0:               (linear_qkv): LoRALinear(
+ 0:                 (to_wrap): TELayerNormColumnParallelLinear(in_features=8192, out_features=5120, bias=False, TP=2)
+ 0:                 (adapter): ParallelLinearAdapter(
+ 0:                   (activation): Identity()
+ 0:                   (linear_in): ColumnParallelLinear(in_features=8192, out_features=16, bias=False, TP=2)
+ 0:                   (linear_out): ColumnParallelLinear(in_features=16, out_features=10240, bias=False, TP=2)
+ 0:                   (dropout): Dropout(p=0.1, inplace=False)
+ 0:                 )
+ 0:               )
+ 0:             )
+ 0:             (pre_cross_attn_layernorm): IdentityOp()
+ 0:             (cross_attention): IdentityOp()
+ 0:             (cross_attn_bda): IdentityFuncOp()
+ 0:             (pre_mlp_layernorm): IdentityOp()
+ 0:             (mlp): TEFusedMLP(
+ 0:               (linear_fc1): TELayerNormColumnParallelLinear(in_features=8192, out_features=28672, bias=False, TP=2)
+ 0:               (linear_fc2): TERowParallelLinear(in_features=14336, out_features=8192, bias=False, TP=2)
+ 0:             )
+ 0:           )
+ 0:         )
+ 0:         (final_layernorm): RMSNorm()
+ 0:       )
+ 0:       (output_layer): ColumnParallelLinear(in_features=8192, out_features=32000, bias=False, TP=2)
+ 0:     )
+ 0:   )
+ 0: )>,
+ 0:                  grad_sync_func=<bound method DistributedDataParallel.start_grad_sync of DistributedDataParallel(
+ 0:   (module): Float16Module(
+ 0:     (module): GPTModel(
+ 0:       (embedding): LanguageModelEmbedding(
+ 0:         (word_embeddings): VocabParallelEmbedding()
+ 0:         (embedding_dropout): Dropout(p=0.0, inplace=False)
+ 0:       )
+ 0:       (rotary_pos_emb): RotaryEmbedding()
+ 0:       (decoder): TransformerBlock(
+ 0:         (layers): ModuleList(
+ 0:           (0-79): 80 x TransformerLayer(
+ 0:             (input_layernorm): IdentityOp()
+ 0:             (self_attention): SelfAttention(
+ 0:               (core_attention): TEDotProductAttention(
+ 0:                 (flash_attention): FlashAttention()
+ 0:                 (fused_attention): FusedAttention()
+ 0:                 (unfused_attention): UnfusedDotProductAttention(
+ 0:                   (scale_mask_softmax): FusedScaleMaskSoftmax()
+ 0:                   (attention_dropout): Dropout(p=0.0, inplace=False)
+ 0:                 )
+ 0:               )
+ 0:               (linear_proj): LoRALinear(
+ 0:                 (to_wrap): TERowParallelLinear(in_features=4096, out_features=8192, bias=False, TP=2)
+ 0:                 (adapter): ParallelLinearAdapter(
+ 0:                   (activation): Identity()
+ 0:                   (linear_in): RowParallelLinear(in_features=8192, out_features=16, bias=False, TP=2)
+ 0:                   (linear_out): ColumnParallelLinear(in_features=16, out_features=8192, bias=False, TP=2)
+ 0:                   (dropout): Dropout(p=0.1, inplace=False)
+ 0:                 )
+ 0:               )
+ 0:               (linear_qkv): LoRALinear(
+ 0:                 (to_wrap): TELayerNormColumnParallelLinear(in_features=8192, out_features=5120, bias=False, TP=2)
+ 0:                 (adapter): ParallelLinearAdapter(
+ 0:                   (activation): Identity()
+ 0:                   (linear_in): ColumnParallelLinear(in_features=8192, out_features=16, bias=False, TP=2)
+ 0:                   (linear_out): ColumnParallelLinear(in_features=16, out_features=10240, bias=False, TP=2)
+ 0:                   (dropout): Dropout(p=0.1, inplace=False)
+ 0:                 )
+ 0:               )
+ 0:             )
+ 0:             (pre_cross_attn_layernorm): IdentityOp()
+ 0:             (cross_attention): IdentityOp()
+ 0:             (cross_attn_bda): IdentityFuncOp()
+ 0:             (pre_mlp_layernorm): IdentityOp()
+ 0:             (mlp): TEFusedMLP(
+ 0:               (linear_fc1): TELayerNormColumnParallelLinear(in_features=8192, out_features=28672, bias=False, TP=2)
+ 0:               (linear_fc2): TERowParallelLinear(in_features=14336, out_features=8192, bias=False, TP=2)
+ 0:             )
+ 0:           )
+ 0:         )
+ 0:         (final_layernorm): RMSNorm()
+ 0:       )
+ 0:       (output_layer): ColumnParallelLinear(in_features=8192, out_features=32000, bias=False, TP=2)
+ 0:     )
+ 0:   )
+ 0: )>,
+ 0:                  param_sync_func=None,
+ 0:                  deterministic_mode=False,
+ 0:                  enable_autocast=False,
+ 0:                  autocast_dtype=torch.bfloat16,
+ 0:                  num_microbatches_with_partial_activation_checkpoints=None,
+ 0:                  gradient_accumulation_fusion=True,
+ 0:                  use_te_rng_tracker=True,
+ 0:                  tp_comm_overlap=False,
+ 0:                  tp_comm_bulk_wgrad=True,
+ 0:                  tp_comm_bulk_dgrad=True,
+ 0:                  tp_comm_overlap_ag=True,
+ 0:                  tp_comm_overlap_rs=True,
+ 0:                  tp_comm_overlap_rs_dgrad=False,
+ 0:                  tp_comm_split_ag=True,
+ 0:                  tp_comm_atomic_ag=False,
+ 0:                  tp_comm_split_rs=True,
+ 0:                  tp_comm_atomic_rs=False,
+ 0:                  cross_entropy_loss_fusion=True,
+ 0:                  cross_entropy_fusion_impl='te',
+ 0:                  tp_comm_overlap_disable_qkv=False,
+ 0:                  tp_comm_overlap_disable_fc1=False,
+ 0:                  tp_comm_bootstrap_backend='nccl',
+ 0:                  overlap_moe_expert_parallel_comm=False,
+ 0:                  delay_wgrad_compute=False,
+ 0:                  overlap_dispatch_backward_with_experts_wgrad=False,
+ 0:                  ep_overlap_early_attn_memory_release=False,
+ 0:                  pipeline_dtype=None,
+ 0:                  variable_seq_lengths=False,
+ 0:                  overlap_p2p_comm=False,
+ 0:                  batch_p2p_comm=True,
+ 0:                  batch_p2p_sync=True,
+ 0:                  use_ring_exchange_p2p=False,
+ 0:                  deallocate_pipeline_outputs=True,
+ 0:                  defer_embedding_wgrad_compute=False,
+ 0:                  wgrad_deferral_limit=0,
+ 0:                  overlap_p2p_comm_warmup_flush=False,
+ 0:                  microbatch_group_size_per_vp_stage=1,
+ 0:                  mtp_standalone=False,
+ 0:                  cpu_offloading=False,
+ 0:                  cpu_offloading_num_layers=20,
+ 0:                  _cpu_offloading_context=None,
+ 0:                  cpu_offloading_activations=True,
+ 0:                  cpu_offloading_weights=False,
+ 0:                  cpu_offloading_double_buffering=False,
+ 0:                  cpu_offloading_retain_pinned_cpu_buffers=False,
+ 0:                  barrier_with_L1_time=True,
+ 0:                  num_layers=80,
+ 0:                  mtp_num_layers=None,
+ 0:                  mtp_loss_scaling_factor=0.1,
+ 0:                  mtp_use_repeated_layer=False,
+ 0:                  mtp_hybrid_override_pattern=None,
+ 0:                  num_layers_in_first_pipeline_stage=None,
+ 0:                  num_layers_in_last_pipeline_stage=None,
+ 0:                  pipeline_model_parallel_layout=None,
+ 0:                  account_for_embedding_in_pipeline_split=False,
+ 0:                  account_for_loss_in_pipeline_split=False,
+ 0:                  hidden_size=8192,
+ 0:                  num_attention_heads=64,
+ 0:                  attention_backend=<AttnBackend.auto: 5>,
+ 0:                  softmax_scale=None,
+ 0:                  softmax_type='vanilla',
+ 0:                  num_query_groups=8,
+ 0:                  ffn_hidden_size=28672,
+ 0:                  kv_channels=128,
+ 0:                  hidden_dropout=0.0,
+ 0:                  attention_dropout=0.0,
+ 0:                  fp32_residual_connection=False,
+ 0:                  apply_residual_connection_post_layernorm=False,
+ 0:                  layernorm_epsilon=1e-05,
+ 0:                  layernorm_zero_centered_gamma=False,
+ 0:                  add_bias_linear=False,
+ 0:                  add_qkv_bias=False,
+ 0:                  gated_linear_unit=True,
+ 0:                  activation_func=<function silu at 0x7f64137659e0>,
+ 0:                  activation_func_fp8_input_store=0,
+ 0:                  glu_linear_offset=0.0,
+ 0:                  activation_func_clamp_value=None,
+ 0:                  num_moe_experts=None,
+ 0:                  rotary_interleaved=False,
+ 0:                  window_size=None,
+ 0:                  window_attn_skip_freq=None,
+ 0:                  normalization='RMSNorm',
+ 0:                  qk_layernorm=False,
+ 0:                  qk_l2_norm=False,
+ 0:                  qk_clip=False,
+ 0:                  qk_clip_alpha=0.5,
+ 0:                  qk_clip_threshold=100,
+ 0:                  log_max_attention_logit=False,
+ 0:                  attention_output_gate=False,
+ 0:                  test_mode=False,
+ 0:                  calculate_per_token_loss=False,
+ 0:                  multi_latent_attention=False,
+ 0:                  no_rope_freq=None,
+ 0:                  experimental_attention_variant=None,
+ 0:                  dsa_indexer_n_heads=None,
+ 0:                  dsa_indexer_head_dim=None,
+ 0:                  dsa_indexer_topk=None,
+ 0:                  dsa_indexer_loss_coeff=None,
+ 0:                  dsa_indexer_use_sparse_loss=False,
+ 0:                  linear_attention_freq=None,
+ 0:                  linear_conv_kernel_dim=4,
+ 0:                  linear_key_head_dim=128,
+ 0:                  linear_value_head_dim=128,
+ 0:                  linear_num_key_heads=16,
+ 0:                  linear_num_value_heads=32,
+ 0:                  init_method=functools.partial(<function normal_ at 0x7f64137e65c0>, mean=0.0, std=0.02),
+ 0:                  output_layer_init_method=functools.partial(<function normal_ at 0x7f64137e65c0>, mean=0.0, std=0.0015811388300841897),
+ 0:                  init_method_std=0.02,
+ 0:                  embedding_init_method=functools.partial(<function normal_ at 0x7f64137e65c0>, mean=0.0, std=0.02),
+ 0:                  embedding_init_method_std=0.02,
+ 0:                  init_model_with_meta_device=False,
+ 0:                  use_mup=False,
+ 0:                  mup_width_mult=1.0,
+ 0:                  mup_base_hidden_size=None,
+ 0:                  mup_embedding_mult=1.0,
+ 0:                  mup_output_mult=1.0,
+ 0:                  mup_base_head_dim=None,
+ 0:                  mup_attn_scale_power=1.0,
+ 0:                  apply_query_key_layer_scaling=False,
+ 0:                  attention_softmax_in_fp32=False,
+ 0:                  disable_bf16_reduced_precision_matmul=False,
+ 0:                  bias_activation_fusion=True,
+ 0:                  masked_softmax_fusion=True,
+ 0:                  persist_layer_norm=True,
+ 0:                  memory_efficient_layer_norm=False,
+ 0:                  bias_dropout_fusion=True,
+ 0:                  apply_rope_fusion=True,
+ 0:                  use_fused_weighted_squared_relu=False,
+ 0:                  fused_single_qkv_rope=1,
+ 0:                  fused_residual_rmsnorm=False,
+ 0:                  recompute_granularity=None,
+ 0:                  recompute_method=None,
+ 0:                  recompute_num_layers=None,
+ 0:                  distribute_saved_activations=False,
+ 0:                  recompute_modules=['core_attn'],
+ 0:                  fp8='hybrid',
+ 0:                  fp8_recipe='delayed',
+ 0:                  fp8_param=False,
+ 0:                  fp8_quantizer_factory=None,
+ 0:                  fp8_margin=0,
+ 0:                  fp8_interval=1,
+ 0:                  fp8_amax_history_len=4,
+ 0:                  fp8_amax_compute_algo='max',
+ 0:                  fp8_wgrad=True,
+ 0:                  fp8_dot_product_attention=1,
+ 0:                  fp8_multi_head_attention=False,
+ 0:                  tp_only_amax_red=False,
+ 0:                  first_last_layers_bf16=False,
+ 0:                  num_layers_at_start_in_bf16=0,
+ 0:                  num_layers_at_end_in_bf16=0,
+ 0:                  use_kitchen=False,
+ 0:                  use_kitchen_attention=False,
+ 0:                  kitchen_attention_backend='sdpa',
+ 0:                  fp4=None,
+ 0:                  fp4_recipe='nvfp4',
+ 0:                  fp4_param=False,
+ 0:                  fp4_quantizer_factory=None,
+ 0:                  moe_shared_expert_intermediate_size=None,
+ 0:                  moe_shared_expert_gate=False,
+ 0:                  moe_shared_expert_overlap=False,
+ 0:                  moe_layer_freq=1,
+ 0:                  moe_ffn_hidden_size=None,
+ 0:                  moe_router_load_balancing_type='aux_loss',
+ 0:                  moe_router_topk=2,
+ 0:                  moe_enable_routing_replay=False,
+ 0:                  moe_router_topk_limited_devices=None,
+ 0:                  moe_router_padding_for_quantization=False,
+ 0:                  moe_router_padding_for_fp8=False,
+ 0:                  moe_router_num_groups=None,
+ 0:                  moe_router_group_topk=None,
+ 0:                  moe_router_pre_softmax=False,
+ 0:                  moe_router_topk_scaling_factor=None,
+ 0:                  moe_router_score_function='softmax',
+ 0:                  moe_router_dtype=None,
+ 0:                  moe_router_enable_expert_bias=False,
+ 0:                  moe_router_bias_update_rate=0.001,
+ 0:                  moe_router_force_load_balancing=False,
+ 0:                  moe_router_force_biased=None,
+ 0:                  moe_grouped_gemm=False,
+ 0:                  moe_aux_loss_coeff=0.0,
+ 0:                  moe_z_loss_coeff=None,
+ 0:                  moe_input_jitter_eps=None,
+ 0:                  moe_token_dropping=False,
+ 0:                  moe_token_dispatcher_type='allgather',
+ 0:                  moe_enable_deepep=False,
+ 0:                  moe_flex_dispatcher_backend='deepep',
+ 0:                  moe_per_layer_logging=False,
+ 0:                  moe_expert_capacity_factor=None,
+ 0:                  moe_pad_expert_input_to_capacity=False,
+ 0:                  moe_pad_experts_for_cuda_graph_inference=False,
+ 0:                  moe_token_drop_policy='probs',
+ 0:                  moe_layer_recompute=False,
+ 0:                  moe_permute_fusion=False,
+ 0:                  moe_router_fusion=False,
+ 0:                  moe_apply_probs_on_input=False,
+ 0:                  moe_latent_size=None,
+ 0:                  moe_deepep_num_sms=20,
+ 0:                  moe_hybridep_num_sms=16,
+ 0:                  cp_comm_type='a2a',
+ 0:                  enable_cuda_graph=False,
+ 0:                  cuda_graph_use_single_mempool=False,
+ 0:                  cuda_graph_retain_backward_graph=False,
+ 0:                  cuda_graph_warmup_steps=3,
+ 0:                  external_cuda_graph=False,
+ 0:                  cuda_graph_impl='none',
+ 0:                  cuda_graph_scope=[],
+ 0:                  clone_scatter_output_in_embedding=True,
+ 0:                  disable_parameter_transpose_cache=True,
+ 0:                  config_logger_dir='',
+ 0:                  flash_decode=False,
+ 0:                  batch_invariant_mode=False,
+ 0:                  use_te_activation_func=False,
+ 0:                  inference_rng_tracker=False,
+ 0:                  inference_sampling_seed=42,
+ 0:                  symmetric_ar_type=None,
+ 0:                  nccl_all_reduce_for_prefill=False,
+ 0:                  use_inference_optimized_layers=False,
+ 0:                  inference_fuse_tp_communication=False,
+ 0:                  inference_disable_triton_nvls_kernels=False,
+ 0:                  inference_grouped_gemm_backend='auto',
+ 0:                  inference_moe_disable_fused_quant_kernels=False,
+ 0:                  mrope_section=None,
+ 0:                  is_hybrid_model=False,
+ 0:                  mamba_state_dim=128,
+ 0:                  mamba_head_dim=64,
+ 0:                  mamba_num_groups=8,
+ 0:                  mamba_num_heads=None,
+ 0:                  use_mamba_mem_eff_path=True,
+ 0:                  mlp_chunks_for_prefill=1,
+ 0:                  heterogeneous_block_specs=False,
+ 0:                  hetereogenous_dist_checkpoint=False,
+ 0:                  quant_recipe=None,
+ 0:                  transformer_impl='transformer_engine',
+ 0:                  fine_grained_activation_offloading=False,
+ 0:                  offload_modules=[],
+ 0:                  min_offloaded_tensor_size=1048576,
+ 0:                  fp16_lm_cross_entropy=False,
+ 0:                  parallel_output=True,
+ 0:                  share_embeddings_and_output_weights=False,
+ 0:                  make_vocab_size_divisible_by=128,
+ 0:                  position_embedding_type='rope',
+ 0:                  rotary_base=10000,
+ 0:                  rotary_percent=1.0,
+ 0:                  rope_scaling=False,
+ 0:                  rope_scaling_factor=1.0,
+ 0:                  rotary_scaling_factor=None,
+ 0:                  seq_len_interpolation_factor=None,
+ 0:                  yarn_rotary_scaling_factor=None,
+ 0:                  yarn_original_max_position_embeddings=None,
+ 0:                  yarn_beta_fast=None,
+ 0:                  yarn_beta_slow=None,
+ 0:                  yarn_mscale=None,
+ 0:                  yarn_mscale_all_dim=None,
+ 0:                  yarn_correction_range_round_to_int=None,
+ 0:                  seq_length=8192,
+ 0:                  scatter_embedding_sequence_parallel=True,
+ 0:                  tp_comm_overlap_cfg=None,
+ 0:                  use_transformer_engine_full_layer_spec=False,
+ 0:                  use_transformer_engine_op_fuser=1,
+ 0:                  dense_grouped_gemm=False,
+ 0:                  transformer_layer_spec=<function default_layer_spec at 0x7f6127b3eac0>,
+ 0:                  hf_model_id=None,
+ 0:                  vocab_size=32000,
+ 0:                  should_pad_vocab=True,
+ 0:                  mtp_enabled=False,
+ 0:                  restore_modelopt_state=False,
+ 0:                  use_arbitrary_attention_mask=None,
+ 0:                  _pg_collection=ProcessGroupCollection(tp(2), pp(1), mp(2), embd(1), pos_embd(1), cp(1), tp_cp(2), hcp(None), ep(1), expt_tp(2), tp_ep(2), tp_ep_pp(2), tp_dp_cp(16), dp(8), dp_cp(8), dp_cp_ag(None), expt_dp(8), expt_dp_ag(None), intra_dp_cp(8), intra_expt_dp(8), inter_dist_opt(None), intra_dist_opt(16)))
+ 0: [2026-11-17 01:27:13,958][callback_warmup][INFO] - Starting training warmup
+ 0: [2026-11-17 01:27:13,958][callback_warmup][INFO] -     Starting warmup step 0
+11: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+11:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+10: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+10:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 8: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 8:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 9: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 9:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+14: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+14:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+15: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+15:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+13: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+13:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+12: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+12:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 4: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 4:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 5: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 5:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 0: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 0:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 1: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 1:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 6: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 6:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 7: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 7:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 3: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 3:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 2: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 2:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 7: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 7:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 5: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 5:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 4: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 4:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 6: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 6:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 0: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 0:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 1: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 1:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 3: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 3:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 2: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 2:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+12: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+12:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+13: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+13:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+14: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+14:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+15: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+15:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 8: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 8:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 9: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 9:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+10: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+10:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+11: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+11:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 6: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 6:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 4: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 4:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 5: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 5:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 0: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 0:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 1: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 1:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+13: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+13:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+12: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+12:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+15: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+15:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 7: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 7:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 8: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 8:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+14: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+14:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 9: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 9:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+11: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+11:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 2: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 2:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 3: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+ 3:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+10: /usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/quantized_tensor.py:118: UserWarning: Quantizer is being updated, this may affect model behavior
+10:   warnings.warn("Quantizer is being updated, this may affect model behavior")
+ 4: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/pipeline_parallel/schedules.py:211: UserWarning: The AccumulateGrad node's stream does not match the stream of the node that produced the incoming gradient. This may incur unnecessary synchronization and break CUDA graph capture if the AccumulateGrad node's stream is the default stream. This mismatch is caused by an AccumulateGrad node created prior to the current iteration being kept alive. This can happen if the autograd graph is still being kept alive by tensors such as the loss, or if you are using DDP, which will stash a reference to the node. To resolve the mismatch, delete all references to the autograd graph or ensure that DDP initialization is performed under the same stream as subsequent forwards. If the mismatch is intentional, you can use torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False) to suppress this warning. (Triggered internally at /opt/pytorch/pytorch/torch/csrc/autograd/input_buffer.cpp:240.)
+ 4:   Variable._execution_engine.run_backward(
+ 5: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/pipeline_parallel/schedules.py:211: UserWarning: The AccumulateGrad node's stream does not match the stream of the node that produced the incoming gradient. This may incur unnecessary synchronization and break CUDA graph capture if the AccumulateGrad node's stream is the default stream. This mismatch is caused by an AccumulateGrad node created prior to the current iteration being kept alive. This can happen if the autograd graph is still being kept alive by tensors such as the loss, or if you are using DDP, which will stash a reference to the node. To resolve the mismatch, delete all references to the autograd graph or ensure that DDP initialization is performed under the same stream as subsequent forwards. If the mismatch is intentional, you can use torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False) to suppress this warning. (Triggered internally at /opt/pytorch/pytorch/torch/csrc/autograd/input_buffer.cpp:240.)
+ 5:   Variable._execution_engine.run_backward(
+ 6: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/pipeline_parallel/schedules.py:211: UserWarning: The AccumulateGrad node's stream does not match the stream of the node that produced the incoming gradient. This may incur unnecessary synchronization and break CUDA graph capture if the AccumulateGrad node's stream is the default stream. This mismatch is caused by an AccumulateGrad node created prior to the current iteration being kept alive. This can happen if the autograd graph is still being kept alive by tensors such as the loss, or if you are using DDP, which will stash a reference to the node. To resolve the mismatch, delete all references to the autograd graph or ensure that DDP initialization is performed under the same stream as subsequent forwards. If the mismatch is intentional, you can use torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False) to suppress this warning. (Triggered internally at /opt/pytorch/pytorch/torch/csrc/autograd/input_buffer.cpp:240.)
+ 6:   Variable._execution_engine.run_backward(
+ 7: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/pipeline_parallel/schedules.py:211: UserWarning: The AccumulateGrad node's stream does not match the stream of the node that produced the incoming gradient. This may incur unnecessary synchronization and break CUDA graph capture if the AccumulateGrad node's stream is the default stream. This mismatch is caused by an AccumulateGrad node created prior to the current iteration being kept alive. This can happen if the autograd graph is still being kept alive by tensors such as the loss, or if you are using DDP, which will stash a reference to the node. To resolve the mismatch, delete all references to the autograd graph or ensure that DDP initialization is performed under the same stream as subsequent forwards. If the mismatch is intentional, you can use torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False) to suppress this warning. (Triggered internally at /opt/pytorch/pytorch/torch/csrc/autograd/input_buffer.cpp:240.)
+ 7:   Variable._execution_engine.run_backward(
+ 0: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/pipeline_parallel/schedules.py:211: UserWarning: The AccumulateGrad node's stream does not match the stream of the node that produced the incoming gradient. This may incur unnecessary synchronization and break CUDA graph capture if the AccumulateGrad node's stream is the default stream. This mismatch is caused by an AccumulateGrad node created prior to the current iteration being kept alive. This can happen if the autograd graph is still being kept alive by tensors such as the loss, or if you are using DDP, which will stash a reference to the node. To resolve the mismatch, delete all references to the autograd graph or ensure that DDP initialization is performed under the same stream as subsequent forwards. If the mismatch is intentional, you can use torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False) to suppress this warning. (Triggered internally at /opt/pytorch/pytorch/torch/csrc/autograd/input_buffer.cpp:240.)
+ 0:   Variable._execution_engine.run_backward(
+ 1: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/pipeline_parallel/schedules.py:211: UserWarning: The AccumulateGrad node's stream does not match the stream of the node that produced the incoming gradient. This may incur unnecessary synchronization and break CUDA graph capture if the AccumulateGrad node's stream is the default stream. This mismatch is caused by an AccumulateGrad node created prior to the current iteration being kept alive. This can happen if the autograd graph is still being kept alive by tensors such as the loss, or if you are using DDP, which will stash a reference to the node. To resolve the mismatch, delete all references to the autograd graph or ensure that DDP initialization is performed under the same stream as subsequent forwards. If the mismatch is intentional, you can use torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False) to suppress this warning. (Triggered internally at /opt/pytorch/pytorch/torch/csrc/autograd/input_buffer.cpp:240.)
+ 1:   Variable._execution_engine.run_backward(
+ 3: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/pipeline_parallel/schedules.py:211: UserWarning: The AccumulateGrad node's stream does not match the stream of the node that produced the incoming gradient. This may incur unnecessary synchronization and break CUDA graph capture if the AccumulateGrad node's stream is the default stream. This mismatch is caused by an AccumulateGrad node created prior to the current iteration being kept alive. This can happen if the autograd graph is still being kept alive by tensors such as the loss, or if you are using DDP, which will stash a reference to the node. To resolve the mismatch, delete all references to the autograd graph or ensure that DDP initialization is performed under the same stream as subsequent forwards. If the mismatch is intentional, you can use torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False) to suppress this warning. (Triggered internally at /opt/pytorch/pytorch/torch/csrc/autograd/input_buffer.cpp:240.)
+ 3:   Variable._execution_engine.run_backward(
+ 2: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/pipeline_parallel/schedules.py:211: UserWarning: The AccumulateGrad node's stream does not match the stream of the node that produced the incoming gradient. This may incur unnecessary synchronization and break CUDA graph capture if the AccumulateGrad node's stream is the default stream. This mismatch is caused by an AccumulateGrad node created prior to the current iteration being kept alive. This can happen if the autograd graph is still being kept alive by tensors such as the loss, or if you are using DDP, which will stash a reference to the node. To resolve the mismatch, delete all references to the autograd graph or ensure that DDP initialization is performed under the same stream as subsequent forwards. If the mismatch is intentional, you can use torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False) to suppress this warning. (Triggered internally at /opt/pytorch/pytorch/torch/csrc/autograd/input_buffer.cpp:240.)
+ 2:   Variable._execution_engine.run_backward(
+12: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/pipeline_parallel/schedules.py:211: UserWarning: The AccumulateGrad node's stream does not match the stream of the node that produced the incoming gradient. This may incur unnecessary synchronization and break CUDA graph capture if the AccumulateGrad node's stream is the default stream. This mismatch is caused by an AccumulateGrad node created prior to the current iteration being kept alive. This can happen if the autograd graph is still being kept alive by tensors such as the loss, or if you are using DDP, which will stash a reference to the node. To resolve the mismatch, delete all references to the autograd graph or ensure that DDP initialization is performed under the same stream as subsequent forwards. If the mismatch is intentional, you can use torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False) to suppress this warning. (Triggered internally at /opt/pytorch/pytorch/torch/csrc/autograd/input_buffer.cpp:240.)
+12:   Variable._execution_engine.run_backward(
+13: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/pipeline_parallel/schedules.py:211: UserWarning: The AccumulateGrad node's stream does not match the stream of the node that produced the incoming gradient. This may incur unnecessary synchronization and break CUDA graph capture if the AccumulateGrad node's stream is the default stream. This mismatch is caused by an AccumulateGrad node created prior to the current iteration being kept alive. This can happen if the autograd graph is still being kept alive by tensors such as the loss, or if you are using DDP, which will stash a reference to the node. To resolve the mismatch, delete all references to the autograd graph or ensure that DDP initialization is performed under the same stream as subsequent forwards. If the mismatch is intentional, you can use torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False) to suppress this warning. (Triggered internally at /opt/pytorch/pytorch/torch/csrc/autograd/input_buffer.cpp:240.)
+13:   Variable._execution_engine.run_backward(
+15: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/pipeline_parallel/schedules.py:211: UserWarning: The AccumulateGrad node's stream does not match the stream of the node that produced the incoming gradient. This may incur unnecessary synchronization and break CUDA graph capture if the AccumulateGrad node's stream is the default stream. This mismatch is caused by an AccumulateGrad node created prior to the current iteration being kept alive. This can happen if the autograd graph is still being kept alive by tensors such as the loss, or if you are using DDP, which will stash a reference to the node. To resolve the mismatch, delete all references to the autograd graph or ensure that DDP initialization is performed under the same stream as subsequent forwards. If the mismatch is intentional, you can use torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False) to suppress this warning. (Triggered internally at /opt/pytorch/pytorch/torch/csrc/autograd/input_buffer.cpp:240.)
+15:   Variable._execution_engine.run_backward(
+14: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/pipeline_parallel/schedules.py:211: UserWarning: The AccumulateGrad node's stream does not match the stream of the node that produced the incoming gradient. This may incur unnecessary synchronization and break CUDA graph capture if the AccumulateGrad node's stream is the default stream. This mismatch is caused by an AccumulateGrad node created prior to the current iteration being kept alive. This can happen if the autograd graph is still being kept alive by tensors such as the loss, or if you are using DDP, which will stash a reference to the node. To resolve the mismatch, delete all references to the autograd graph or ensure that DDP initialization is performed under the same stream as subsequent forwards. If the mismatch is intentional, you can use torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False) to suppress this warning. (Triggered internally at /opt/pytorch/pytorch/torch/csrc/autograd/input_buffer.cpp:240.)
+14:   Variable._execution_engine.run_backward(
+ 9: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/pipeline_parallel/schedules.py:211: UserWarning: The AccumulateGrad node's stream does not match the stream of the node that produced the incoming gradient. This may incur unnecessary synchronization and break CUDA graph capture if the AccumulateGrad node's stream is the default stream. This mismatch is caused by an AccumulateGrad node created prior to the current iteration being kept alive. This can happen if the autograd graph is still being kept alive by tensors such as the loss, or if you are using DDP, which will stash a reference to the node. To resolve the mismatch, delete all references to the autograd graph or ensure that DDP initialization is performed under the same stream as subsequent forwards. If the mismatch is intentional, you can use torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False) to suppress this warning. (Triggered internally at /opt/pytorch/pytorch/torch/csrc/autograd/input_buffer.cpp:240.)
+ 9:   Variable._execution_engine.run_backward(
+ 8: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/pipeline_parallel/schedules.py:211: UserWarning: The AccumulateGrad node's stream does not match the stream of the node that produced the incoming gradient. This may incur unnecessary synchronization and break CUDA graph capture if the AccumulateGrad node's stream is the default stream. This mismatch is caused by an AccumulateGrad node created prior to the current iteration being kept alive. This can happen if the autograd graph is still being kept alive by tensors such as the loss, or if you are using DDP, which will stash a reference to the node. To resolve the mismatch, delete all references to the autograd graph or ensure that DDP initialization is performed under the same stream as subsequent forwards. If the mismatch is intentional, you can use torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False) to suppress this warning. (Triggered internally at /opt/pytorch/pytorch/torch/csrc/autograd/input_buffer.cpp:240.)
+ 8:   Variable._execution_engine.run_backward(
+11: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/pipeline_parallel/schedules.py:211: UserWarning: The AccumulateGrad node's stream does not match the stream of the node that produced the incoming gradient. This may incur unnecessary synchronization and break CUDA graph capture if the AccumulateGrad node's stream is the default stream. This mismatch is caused by an AccumulateGrad node created prior to the current iteration being kept alive. This can happen if the autograd graph is still being kept alive by tensors such as the loss, or if you are using DDP, which will stash a reference to the node. To resolve the mismatch, delete all references to the autograd graph or ensure that DDP initialization is performed under the same stream as subsequent forwards. If the mismatch is intentional, you can use torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False) to suppress this warning. (Triggered internally at /opt/pytorch/pytorch/torch/csrc/autograd/input_buffer.cpp:240.)
+11:   Variable._execution_engine.run_backward(
+10: /workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/pipeline_parallel/schedules.py:211: UserWarning: The AccumulateGrad node's stream does not match the stream of the node that produced the incoming gradient. This may incur unnecessary synchronization and break CUDA graph capture if the AccumulateGrad node's stream is the default stream. This mismatch is caused by an AccumulateGrad node created prior to the current iteration being kept alive. This can happen if the autograd graph is still being kept alive by tensors such as the loss, or if you are using DDP, which will stash a reference to the node. To resolve the mismatch, delete all references to the autograd graph or ensure that DDP initialization is performed under the same stream as subsequent forwards. If the mismatch is intentional, you can use torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False) to suppress this warning. (Triggered internally at /opt/pytorch/pytorch/torch/csrc/autograd/input_buffer.cpp:240.)
+10:   Variable._execution_engine.run_backward(
+ 0: /usr/local/lib/python3.12/dist-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+ 0:   return func(*args, **kwargs)
+ 0: [2026-11-17 01:27:28,559][callback_warmup][INFO] -     Finished warmup step 0, takes 14.600085258483887 s
+ 0: [2026-11-17 01:27:28,559][callback_warmup][INFO] -     Starting warmup step 1
+ 0: [2026-11-17 01:27:30,665][callback_warmup][INFO] -     Finished warmup step 1, takes 2.1057188510894775 s
+ 0: [2026-11-17 01:27:30,666][callback_warmup][INFO] - Starting validation warmups
+ 0: [2026-11-17 01:27:35,380][callback_warmup][INFO] - Finished validation warmup: 4.713692665100098 s. 
+ 0: [2026-11-17 01:27:35,380][callback_warmup][INFO] - Time spent in run_training_warmup: 21.4219012260437s
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850055380, "event_type": "INTERVAL_END", "key": "init_stop", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 53}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850055424, "event_type": "INTERVAL_START", "key": "run_start", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 53}}
+ 0:  > datasets target sizes (minimum size):
+ 0:     train:      6400
+ 0:     validation: 2992
+ 0:     test:       176
+ 0: >building train, validation, and test datasets for Finetuning dataset from /data ...
+ 0: Building FinetuningDatasetBuilder with root=/data
+ 0: Using packed sequences with size 8192
+ 0: Skipping packed training data preparation - already exists: /data/train.npy
+ 0: Skipping packed validation data preparation - already exists: /data/validation.npy
+ 0: > finished creating Finetuning dataset from /data ...
+ 0: [after dataloaders are built] datetime: 2026-11-17 01:27:36 
+ 0: done with setup ...
+ 0: Setting rerun_state_machine.current_iteration to 0...
+ 0: Starting training loop at iteration 0
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850056830, "event_type": "INTERVAL_START", "key": "block_start", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 57, "samples_count": 1536, "step": 0}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850080219, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.17924427986145, "reduced_train_loss": 2.3635523319244385}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 80}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850102332, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.2409565448760986, "reduced_train_loss": 1.5128000974655151}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 160}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850124898, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.279209852218628, "reduced_train_loss": 1.1704758405685425}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 240}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850147887, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.318321704864502, "reduced_train_loss": 1.1860555410385132}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 320}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850171187, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.339708089828491, "reduced_train_loss": 1.3737375736236572}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 400}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850194749, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.3595669269561768, "reduced_train_loss": 1.3240272998809814}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 480}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850218396, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.3670194149017334, "reduced_train_loss": 1.101952075958252}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 560}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850242229, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.374624252319336, "reduced_train_loss": 1.2571601867675781}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 640}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850266085, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.3921287059783936, "reduced_train_loss": 1.1313050985336304}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 720}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850290023, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.396507978439331, "reduced_train_loss": 1.5991432666778564}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 800}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850313990, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.389371395111084, "reduced_train_loss": 1.2374351024627686}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 880}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850338043, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.3948469161987305, "reduced_train_loss": 1.203016996383667}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 960}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850362066, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.4059438705444336, "reduced_train_loss": 1.2107716798782349}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 1040}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850386171, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.4193735122680664, "reduced_train_loss": 1.1710113286972046}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 1120}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850410318, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.4101388454437256, "reduced_train_loss": 1.1599351167678833}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 1200}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850434497, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.416926383972168, "reduced_train_loss": 1.6756633520126343}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 1280}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850458670, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.4099955558776855, "reduced_train_loss": 1.4225482940673828}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 1360}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850482838, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.414736270904541, "reduced_train_loss": 1.2100598812103271}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 1440}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850507036, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.4122252464294434, "reduced_train_loss": 1.5700665712356567}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 1520}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850511566, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.368413288902687}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 177, "samples_count": 1536}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850511566, "event_type": "INTERVAL_END", "key": "block_stop", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 164, "samples_count": 1536, "step": 192}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850511567, "event_type": "INTERVAL_START", "key": "eval_start", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 80, "samples_count": 1536, "step": 192}}
+15: -----------------------------------------------------------------------------------------------
+15:  validation loss at iteration 192 | lm loss value: 9.429676E-01 | lm loss PPL: 2.567590E+00 | 
+15: -----------------------------------------------------------------------------------------------
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850537429, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"validation_time": 25.863444150003488}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 188, "step": 192}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850537430, "event_type": "POINT_IN_TIME", "key": "eval_accuracy", "value": 0.9429675936698914, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 96, "samples_count": 1536}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850537431, "event_type": "INTERVAL_END", "key": "eval_stop", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 101, "samples_count": 1536, "step": 192}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850537431, "event_type": "INTERVAL_START", "key": "block_start", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 149, "samples_count": 384, "step": 192}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850556731, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.4222185611724854, "reduced_train_loss": 1.2107435464859009}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 1600}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850580865, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.4126815795898438, "reduced_train_loss": 1.1603586673736572}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 1680}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850605004, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.4127767086029053, "reduced_train_loss": 1.2177419662475586}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 1760}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850629191, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.416123867034912, "reduced_train_loss": 1.3084583282470703}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 1840}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850653420, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.4253268241882324, "reduced_train_loss": 1.4036295413970947}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 1920}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850653427, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.416609025204804}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 177, "samples_count": 384}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850653427, "event_type": "INTERVAL_END", "key": "block_stop", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 164, "samples_count": 384, "step": 240}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850653427, "event_type": "INTERVAL_START", "key": "eval_start", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 80, "samples_count": 1920, "step": 240}}
+15: -----------------------------------------------------------------------------------------------
+15:  validation loss at iteration 240 | lm loss value: 9.330906E-01 | lm loss PPL: 2.542355E+00 | 
+15: -----------------------------------------------------------------------------------------------
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850677860, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"validation_time": 24.43289994999941}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 188, "step": 240}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850677860, "event_type": "POINT_IN_TIME", "key": "eval_accuracy", "value": 0.9330906271934509, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 96, "samples_count": 1920}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850677860, "event_type": "INTERVAL_END", "key": "eval_stop", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 101, "samples_count": 1920, "step": 240}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850677861, "event_type": "INTERVAL_START", "key": "block_start", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 149, "samples_count": 384, "step": 240}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850702049, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.4195761680603027, "reduced_train_loss": 1.3846802711486816}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 2000}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850726264, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.4229576587677, "reduced_train_loss": 1.4106448888778687}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 2080}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850750515, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.4330780506134033, "reduced_train_loss": 1.3348100185394287}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 2160}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850774768, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.423029899597168, "reduced_train_loss": 1.2814761400222778}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 2240}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850793866, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.4168035476214405}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 177, "samples_count": 384}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850793867, "event_type": "INTERVAL_END", "key": "block_stop", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 164, "samples_count": 384, "step": 288}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850793867, "event_type": "INTERVAL_START", "key": "eval_start", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 80, "samples_count": 2304, "step": 288}}
+15: -----------------------------------------------------------------------------------------------
+15:  validation loss at iteration 288 | lm loss value: 9.292464E-01 | lm loss PPL: 2.532600E+00 | 
+15: -----------------------------------------------------------------------------------------------
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850818421, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"validation_time": 24.55504463201214}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 188, "step": 288}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850818422, "event_type": "POINT_IN_TIME", "key": "eval_accuracy", "value": 0.9292464256286621, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 96, "samples_count": 2304}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850818422, "event_type": "INTERVAL_END", "key": "eval_stop", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 101, "samples_count": 2304, "step": 288}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850818422, "event_type": "INTERVAL_START", "key": "block_start", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 149, "samples_count": 384, "step": 288}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850823263, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.416907787322998, "reduced_train_loss": 1.3465875387191772}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 2320}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850847479, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.4166319370269775, "reduced_train_loss": 1.3450978994369507}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 2400}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850871730, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.426002025604248, "reduced_train_loss": 1.4203675985336304}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 2480}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850895972, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.4236695766448975, "reduced_train_loss": 1.485945463180542}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 2560}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850920223, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.4344589710235596, "reduced_train_loss": 1.322623610496521}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 2640}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850934437, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.416997142204628}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 177, "samples_count": 384}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850934438, "event_type": "INTERVAL_END", "key": "block_stop", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 164, "samples_count": 384, "step": 336}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850934438, "event_type": "INTERVAL_START", "key": "eval_start", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 80, "samples_count": 2688, "step": 336}}
+15: -----------------------------------------------------------------------------------------------
+15:  validation loss at iteration 336 | lm loss value: 9.330957E-01 | lm loss PPL: 2.542367E+00 | 
+15: -----------------------------------------------------------------------------------------------
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850958934, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"validation_time": 24.49694644099509}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 188, "step": 336}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850958935, "event_type": "POINT_IN_TIME", "key": "eval_accuracy", "value": 0.9330956935882568, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 96, "samples_count": 2688}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850958935, "event_type": "INTERVAL_END", "key": "eval_stop", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 101, "samples_count": 2688, "step": 336}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850958935, "event_type": "INTERVAL_START", "key": "block_start", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 149, "samples_count": 384, "step": 336}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850968626, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.4181203842163086, "reduced_train_loss": 1.3753814697265625}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 2720}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794850992863, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.431765556335449, "reduced_train_loss": 1.1246405839920044}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 2800}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794851017080, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.4222028255462646, "reduced_train_loss": 1.461139440536499}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 2880}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794851041330, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.42244815826416, "reduced_train_loss": 1.2275519371032715}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 2960}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794851065572, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.423677921295166, "reduced_train_loss": 1.4467507600784302}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 220, "samples_count": 3040}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794851074957, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"train_step_time": 2.41714113366317}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 177, "samples_count": 384}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794851074957, "event_type": "INTERVAL_END", "key": "block_stop", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 164, "samples_count": 384, "step": 384}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794851074957, "event_type": "INTERVAL_START", "key": "eval_start", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 80, "samples_count": 3072, "step": 384}}
+15: -----------------------------------------------------------------------------------------------
+15:  validation loss at iteration 384 | lm loss value: 9.245525E-01 | lm loss PPL: 2.520740E+00 | 
+15: -----------------------------------------------------------------------------------------------
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794851099518, "event_type": "POINT_IN_TIME", "key": "tracked_stats", "value": {"validation_time": 24.561514610002632}, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 188, "step": 384}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794851099519, "event_type": "POINT_IN_TIME", "key": "eval_accuracy", "value": 0.9245525002479553, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 96, "samples_count": 3072}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794851099519, "event_type": "INTERVAL_END", "key": "eval_stop", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 101, "samples_count": 3072, "step": 384}}
+ 0: :::MLLOG {"namespace": "", "time_ms": 1794851099519, "event_type": "INTERVAL_END", "key": "run_stop", "value": null, "metadata": {"file": "/workspace/ft-llm/callback_logging.py", "lineno": 111, "samples_count": 3072, "status": "success"}}
+ 0: Deleting CUDA graphs
+ 0: [after training is done] datetime: 2026-11-17 01:45:00 
+ 6: [NTU_FUSED_LORA] calls {'qkv': 0, 'qkv_local': 39760, 'proj': 39760, 'fallback': 0, 'ln_grad_skipped': 30494}
+ 0: [NTU_FUSED_LORA] calls {'qkv': 0, 'qkv_local': 39760, 'proj': 39760, 'fallback': 0, 'ln_grad_skipped': 30494}
+ 2: [NTU_FUSED_LORA] calls {'qkv': 0, 'qkv_local': 39760, 'proj': 39760, 'fallback': 0, 'ln_grad_skipped': 30494}
+ 1: [NTU_FUSED_LORA] calls {'qkv': 0, 'qkv_local': 39760, 'proj': 39760, 'fallback': 0, 'ln_grad_skipped': 30494}
+ 3: [NTU_FUSED_LORA] calls {'qkv': 0, 'qkv_local': 39760, 'proj': 39760, 'fallback': 0, 'ln_grad_skipped': 30494}
+ 5: [NTU_FUSED_LORA] calls {'qkv': 0, 'qkv_local': 39760, 'proj': 39760, 'fallback': 0, 'ln_grad_skipped': 30494}
+ 7: [NTU_FUSED_LORA] calls {'qkv': 0, 'qkv_local': 39760, 'proj': 39760, 'fallback': 0, 'ln_grad_skipped': 30494}
+ 4: [NTU_FUSED_LORA] calls {'qkv': 0, 'qkv_local': 39760, 'proj': 39760, 'fallback': 0, 'ln_grad_skipped': 30494}
+ 6: [NTU_ATTN_BWD] calls {'ntu': 30880, 'fallback': 0}
+ 6: [NTU_DG_GRADQ] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 6: [NTU_ROPE] calls {'fwd': 39760, 'bwd': 30880, 'fallback': 0, 'quant_nocat': 39760, 'dequant_nocat': 0, 'cat_fallback': 0}
+ 6: [NTU_DSWIGLU_DG] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 6: [NTU_FP8_DY_AG] calls {'fp8_ag': 0, 'e4m3_1x128_ag': 30880, 'bf16_ag': 0}
+ 6: [DG_DGRAD] calls {'deepgemm': 123134, 'prequant': 123134, 'fallback': 159040, 't_dropped': 123454, 'fwd_t_skipped': 79520, 'max_alloc_GiB': 128.43, 'max_reserved_GiB': 136.77}
+ 5: [NTU_ATTN_BWD] calls {'ntu': 30880, 'fallback': 0}
+ 5: [NTU_DG_GRADQ] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 5: [NTU_ROPE] calls {'fwd': 39760, 'bwd': 30880, 'fallback': 0, 'quant_nocat': 39760, 'dequant_nocat': 0, 'cat_fallback': 0}
+ 5: [NTU_DSWIGLU_DG] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 5: [NTU_FP8_DY_AG] calls {'fp8_ag': 0, 'e4m3_1x128_ag': 30880, 'bf16_ag': 0}
+ 5: [DG_DGRAD] calls {'deepgemm': 123134, 'prequant': 123134, 'fallback': 159040, 't_dropped': 123454, 'fwd_t_skipped': 79520, 'max_alloc_GiB': 128.43, 'max_reserved_GiB': 136.77}
+ 0: [NTU_ATTN_BWD] calls {'ntu': 30880, 'fallback': 0}
+ 0: [NTU_DG_GRADQ] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 0: [NTU_ROPE] calls {'fwd': 39760, 'bwd': 30880, 'fallback': 0, 'quant_nocat': 39760, 'dequant_nocat': 0, 'cat_fallback': 0}
+ 0: [NTU_DSWIGLU_DG] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 0: [NTU_FP8_DY_AG] calls {'fp8_ag': 0, 'e4m3_1x128_ag': 30880, 'bf16_ag': 0}
+ 0: [DG_DGRAD] calls {'deepgemm': 123134, 'prequant': 123134, 'fallback': 159040, 't_dropped': 123454, 'fwd_t_skipped': 79520, 'max_alloc_GiB': 128.43, 'max_reserved_GiB': 136.99}
+ 1: [NTU_ATTN_BWD] calls {'ntu': 30880, 'fallback': 0}
+ 1: [NTU_DG_GRADQ] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 1: [NTU_ROPE] calls {'fwd': 39760, 'bwd': 30880, 'fallback': 0, 'quant_nocat': 39760, 'dequant_nocat': 0, 'cat_fallback': 0}
+ 1: [NTU_DSWIGLU_DG] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 1: [NTU_FP8_DY_AG] calls {'fp8_ag': 0, 'e4m3_1x128_ag': 30880, 'bf16_ag': 0}
+ 1: [DG_DGRAD] calls {'deepgemm': 123134, 'prequant': 123134, 'fallback': 159040, 't_dropped': 123454, 'fwd_t_skipped': 79520, 'max_alloc_GiB': 128.43, 'max_reserved_GiB': 136.77}
+ 2: [NTU_ATTN_BWD] calls {'ntu': 30880, 'fallback': 0}
+ 2: [NTU_DG_GRADQ] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 2: [NTU_ROPE] calls {'fwd': 39760, 'bwd': 30880, 'fallback': 0, 'quant_nocat': 39760, 'dequant_nocat': 0, 'cat_fallback': 0}
+ 2: [NTU_DSWIGLU_DG] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 2: [NTU_FP8_DY_AG] calls {'fp8_ag': 0, 'e4m3_1x128_ag': 30880, 'bf16_ag': 0}
+ 2: [DG_DGRAD] calls {'deepgemm': 123134, 'prequant': 123134, 'fallback': 159040, 't_dropped': 123454, 'fwd_t_skipped': 79520, 'max_alloc_GiB': 128.43, 'max_reserved_GiB': 136.99}
+ 7: [NTU_ATTN_BWD] calls {'ntu': 30880, 'fallback': 0}
+ 7: [NTU_DG_GRADQ] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 7: [NTU_ROPE] calls {'fwd': 39760, 'bwd': 30880, 'fallback': 0, 'quant_nocat': 39760, 'dequant_nocat': 0, 'cat_fallback': 0}
+ 7: [NTU_DSWIGLU_DG] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 7: [NTU_FP8_DY_AG] calls {'fp8_ag': 0, 'e4m3_1x128_ag': 30880, 'bf16_ag': 0}
+ 7: [DG_DGRAD] calls {'deepgemm': 123134, 'prequant': 123134, 'fallback': 159040, 't_dropped': 123454, 'fwd_t_skipped': 79520, 'max_alloc_GiB': 128.43, 'max_reserved_GiB': 136.77}
+ 3: [NTU_ATTN_BWD] calls {'ntu': 30880, 'fallback': 0}
+ 3: [NTU_DG_GRADQ] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 3: [NTU_ROPE] calls {'fwd': 39760, 'bwd': 30880, 'fallback': 0, 'quant_nocat': 39760, 'dequant_nocat': 0, 'cat_fallback': 0}
+ 3: [NTU_DSWIGLU_DG] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 3: [NTU_FP8_DY_AG] calls {'fp8_ag': 0, 'e4m3_1x128_ag': 30880, 'bf16_ag': 0}
+ 3: [DG_DGRAD] calls {'deepgemm': 123134, 'prequant': 123134, 'fallback': 159040, 't_dropped': 123454, 'fwd_t_skipped': 79520, 'max_alloc_GiB': 128.43, 'max_reserved_GiB': 136.77}
+ 4: [NTU_ATTN_BWD] calls {'ntu': 30880, 'fallback': 0}
+ 4: [NTU_DG_GRADQ] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 4: [NTU_ROPE] calls {'fwd': 39760, 'bwd': 30880, 'fallback': 0, 'quant_nocat': 39760, 'dequant_nocat': 0, 'cat_fallback': 0}
+ 4: [NTU_DSWIGLU_DG] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 4: [NTU_FP8_DY_AG] calls {'fp8_ag': 0, 'e4m3_1x128_ag': 30880, 'bf16_ag': 0}
+ 4: [DG_DGRAD] calls {'deepgemm': 123134, 'prequant': 123134, 'fallback': 159040, 't_dropped': 123454, 'fwd_t_skipped': 79520, 'max_alloc_GiB': 128.43, 'max_reserved_GiB': 136.77}
+ 9: [NTU_FUSED_LORA] calls {'qkv': 0, 'qkv_local': 39760, 'proj': 39760, 'fallback': 0, 'ln_grad_skipped': 30494}
+11: [NTU_FUSED_LORA] calls {'qkv': 0, 'qkv_local': 39760, 'proj': 39760, 'fallback': 0, 'ln_grad_skipped': 30494}
+ 8: [NTU_FUSED_LORA] calls {'qkv': 0, 'qkv_local': 39760, 'proj': 39760, 'fallback': 0, 'ln_grad_skipped': 30494}
+10: [NTU_FUSED_LORA] calls {'qkv': 0, 'qkv_local': 39760, 'proj': 39760, 'fallback': 0, 'ln_grad_skipped': 30494}
+13: [NTU_FUSED_LORA] calls {'qkv': 0, 'qkv_local': 39760, 'proj': 39760, 'fallback': 0, 'ln_grad_skipped': 30494}
+14: [NTU_FUSED_LORA] calls {'qkv': 0, 'qkv_local': 39760, 'proj': 39760, 'fallback': 0, 'ln_grad_skipped': 30494}
+15: [NTU_FUSED_LORA] calls {'qkv': 0, 'qkv_local': 39760, 'proj': 39760, 'fallback': 0, 'ln_grad_skipped': 30494}
+12: [NTU_FUSED_LORA] calls {'qkv': 0, 'qkv_local': 39760, 'proj': 39760, 'fallback': 0, 'ln_grad_skipped': 30494}
+ 9: [NTU_ATTN_BWD] calls {'ntu': 30880, 'fallback': 0}
+ 9: [NTU_DG_GRADQ] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 9: [NTU_ROPE] calls {'fwd': 39760, 'bwd': 30880, 'fallback': 0, 'quant_nocat': 39760, 'dequant_nocat': 0, 'cat_fallback': 0}
+ 9: [NTU_DSWIGLU_DG] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 9: [NTU_FP8_DY_AG] calls {'fp8_ag': 0, 'e4m3_1x128_ag': 30880, 'bf16_ag': 0}
+ 9: [DG_DGRAD] calls {'deepgemm': 123134, 'prequant': 123134, 'fallback': 159040, 't_dropped': 123454, 'fwd_t_skipped': 79520, 'max_alloc_GiB': 128.43, 'max_reserved_GiB': 136.55}
+11: [NTU_ATTN_BWD] calls {'ntu': 30880, 'fallback': 0}
+11: [NTU_DG_GRADQ] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+11: [NTU_ROPE] calls {'fwd': 39760, 'bwd': 30880, 'fallback': 0, 'quant_nocat': 39760, 'dequant_nocat': 0, 'cat_fallback': 0}
+11: [NTU_DSWIGLU_DG] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+11: [NTU_FP8_DY_AG] calls {'fp8_ag': 0, 'e4m3_1x128_ag': 30880, 'bf16_ag': 0}
+11: [DG_DGRAD] calls {'deepgemm': 123134, 'prequant': 123134, 'fallback': 159040, 't_dropped': 123454, 'fwd_t_skipped': 79520, 'max_alloc_GiB': 128.43, 'max_reserved_GiB': 136.55}
+ 8: [NTU_ATTN_BWD] calls {'ntu': 30880, 'fallback': 0}
+ 8: [NTU_DG_GRADQ] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 8: [NTU_ROPE] calls {'fwd': 39760, 'bwd': 30880, 'fallback': 0, 'quant_nocat': 39760, 'dequant_nocat': 0, 'cat_fallback': 0}
+ 8: [NTU_DSWIGLU_DG] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+ 8: [NTU_FP8_DY_AG] calls {'fp8_ag': 0, 'e4m3_1x128_ag': 30880, 'bf16_ag': 0}
+ 8: [DG_DGRAD] calls {'deepgemm': 123134, 'prequant': 123134, 'fallback': 159040, 't_dropped': 123454, 'fwd_t_skipped': 79520, 'max_alloc_GiB': 128.43, 'max_reserved_GiB': 136.77}
+10: [NTU_ATTN_BWD] calls {'ntu': 30880, 'fallback': 0}
+10: [NTU_DG_GRADQ] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+10: [NTU_ROPE] calls {'fwd': 39760, 'bwd': 30880, 'fallback': 0, 'quant_nocat': 39760, 'dequant_nocat': 0, 'cat_fallback': 0}
+10: [NTU_DSWIGLU_DG] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+10: [NTU_FP8_DY_AG] calls {'fp8_ag': 0, 'e4m3_1x128_ag': 30880, 'bf16_ag': 0}
+10: [DG_DGRAD] calls {'deepgemm': 123134, 'prequant': 123134, 'fallback': 159040, 't_dropped': 123454, 'fwd_t_skipped': 79520, 'max_alloc_GiB': 128.43, 'max_reserved_GiB': 136.77}
+13: [NTU_ATTN_BWD] calls {'ntu': 30880, 'fallback': 0}
+13: [NTU_DG_GRADQ] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+13: [NTU_ROPE] calls {'fwd': 39760, 'bwd': 30880, 'fallback': 0, 'quant_nocat': 39760, 'dequant_nocat': 0, 'cat_fallback': 0}
+13: [NTU_DSWIGLU_DG] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+13: [NTU_FP8_DY_AG] calls {'fp8_ag': 0, 'e4m3_1x128_ag': 30880, 'bf16_ag': 0}
+13: [DG_DGRAD] calls {'deepgemm': 123134, 'prequant': 123134, 'fallback': 159040, 't_dropped': 123454, 'fwd_t_skipped': 79520, 'max_alloc_GiB': 128.43, 'max_reserved_GiB': 136.77}
+14: [NTU_ATTN_BWD] calls {'ntu': 30880, 'fallback': 0}
+14: [NTU_DG_GRADQ] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+14: [NTU_ROPE] calls {'fwd': 39760, 'bwd': 30880, 'fallback': 0, 'quant_nocat': 39760, 'dequant_nocat': 0, 'cat_fallback': 0}
+14: [NTU_DSWIGLU_DG] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+14: [NTU_FP8_DY_AG] calls {'fp8_ag': 0, 'e4m3_1x128_ag': 30880, 'bf16_ag': 0}
+14: [DG_DGRAD] calls {'deepgemm': 123134, 'prequant': 123134, 'fallback': 159040, 't_dropped': 123454, 'fwd_t_skipped': 79520, 'max_alloc_GiB': 128.43, 'max_reserved_GiB': 136.99}
+12: [NTU_ATTN_BWD] calls {'ntu': 30880, 'fallback': 0}
+12: [NTU_DG_GRADQ] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+12: [NTU_ROPE] calls {'fwd': 39760, 'bwd': 30880, 'fallback': 0, 'quant_nocat': 39760, 'dequant_nocat': 0, 'cat_fallback': 0}
+12: [NTU_DSWIGLU_DG] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+12: [NTU_FP8_DY_AG] calls {'fp8_ag': 0, 'e4m3_1x128_ag': 30880, 'bf16_ag': 0}
+12: [DG_DGRAD] calls {'deepgemm': 123134, 'prequant': 123134, 'fallback': 159040, 't_dropped': 123454, 'fwd_t_skipped': 79520, 'max_alloc_GiB': 128.43, 'max_reserved_GiB': 136.99}
+15: [NTU_ATTN_BWD] calls {'ntu': 30880, 'fallback': 0}
+15: [NTU_DG_GRADQ] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+15: [NTU_ROPE] calls {'fwd': 39760, 'bwd': 30880, 'fallback': 0, 'quant_nocat': 39760, 'dequant_nocat': 0, 'cat_fallback': 0}
+15: [NTU_DSWIGLU_DG] calls {'dswiglu_fused': 30880, 'dswiglu_fallback': 0, 'gradq_local': 30494, 'gradq_gather': 30880, 'gradq_fallback': 0}
+15: [NTU_FP8_DY_AG] calls {'fp8_ag': 0, 'e4m3_1x128_ag': 30880, 'bf16_ag': 0}
+15: [DG_DGRAD] calls {'deepgemm': 123134, 'prequant': 123134, 'fallback': 159040, 't_dropped': 123454, 'fwd_t_skipped': 79520, 'max_alloc_GiB': 128.43, 'max_reserved_GiB': 136.77}
++ RUN_AND_TIME_EXIT_STATUS=0
+++ date +%s
++ echo 'RUNANDTIME_STOP 1794851113'
+RUNANDTIME_STOP 1794851113
++ echo 0
++ set -e
++ [[ 1 -eq 1 ]]
+++ realpath /work/benchmark/MLPerf/runs/sub_22259_010013
++ srun -N1 -n1 --container-name=llama2_70b_lora_persist_l2l-nemo --no-container-mount-home --container-remap-root --container-writable --container-env=BASH_ENV,ENV --container-mounts=/work/benchmark/MLPerf/runs/sub_22259_010013:/results --container-workdir=/results python3 -m mlperf_logging.compliance_checker --usage training --ruleset 6.0.0 --log_output /results/compliance_261117010013582288767.out /results/261117010013582288767_1.log
+INFO - Running compliance on file: /results/261117010013582288767_1.log
+INFO -  Compliance checks: training_6.0.0/common.yaml
+INFO -  Compliance checks: training_6.0.0/closed_common.yaml
+INFO -  Compliance checks: training_6.0.0/closed_llama2_70b_lora.yaml
+INFO - SUCCESS
+** Logging output also at /results/compliance_261117010013582288767.out
++ EXTRA_ASSETS=' --asset /results/compliance_261117010013582288767.out'
+++ find /work/benchmark/MLPerf/runs/sub_22259_010013 -name 'stat*.json' -type f -printf %f
++ stat_file=
++ [[ -f /work/benchmark/MLPerf/runs/sub_22259_010013/ ]]
+++ date +%s
++ echo 'EXPERIMENT_STOP 1794851118'
+EXPERIMENT_STOP 1794851118
++ cleanup_pyxis
++ [[ 1 -eq 1 ]]
++ echo 'REUSE_CONTAINER=1: keeping cached container'
+REUSE_CONTAINER=1: keeping cached container
++ return 0

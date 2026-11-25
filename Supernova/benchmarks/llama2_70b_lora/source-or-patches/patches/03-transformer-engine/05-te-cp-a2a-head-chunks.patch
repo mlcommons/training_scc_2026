@@ -1,0 +1,387 @@
+diff --git a/transformer_engine/pytorch/attention/dot_product_attention/context_parallel.py b/transformer_engine/pytorch/attention/dot_product_attention/context_parallel.py
+--- a/transformer_engine/pytorch/attention/dot_product_attention/context_parallel.py
++++ b/transformer_engine/pytorch/attention/dot_product_attention/context_parallel.py
+@@ -4579,6 +4579,133 @@
+     return fav3_attention_fwd
+ 
+ 
++
++def _a2a_head_chunks():
++    """NVTE_CP_A2A_HEAD_CHUNKS: head groups the CP all-to-all attention is
++    pipelined over (1 = the stock single exchange). q/out are exchanged in
++    this many chunks; k/v in at most hkv//cp chunks (whole kv heads per rank
++    block, shared by consecutive q chunks), so a GQA group's backward still
++    sees all its q heads in one call."""
++    return int(os.getenv("NVTE_CP_A2A_HEAD_CHUNKS", "1"))
++
++
++def _a2a_kv_chunks(n_chunks, k, cp_size):
++    """k/v exchange chunks: capped at whole kv heads per rank block."""
++    return min(n_chunks, k.shape[-2] // cp_size)
++
++
++def _cp_p2p(ops):
++    """Launch grouped NCCL send/recv ops; returns the works to wait on."""
++    return torch.distributed.batch_isend_irecv(ops) if ops else []
++
++
++def _a2a_pre_launch(x, g, n_chunks, cp_size, cp_group):
++    """Start the before-attention exchange of head chunk g of an sbhd tensor.
++
++    x is [s/cp, b, h, d] holding this rank's two load-balanced sequence chunks
++    (global chunks rank and 2*cp-1-rank, each L = s/(2*cp) long); destination
++    rank r owns heads [r*h/cp, (r+1)*h/cp) and chunk g is the g-th of n_chunks
++    equal head groups in every rank's block. The result is the full sequence in
++    order, [s, b, hc, d]: each received half lands directly in its final
++    sequence position (no reorder pass), and this rank's own halves are copied
++    there. Returns (out, works).
++    """
++    s_local, b, h, d = x.shape
++    hc = h // (cp_size * n_chunks)
++    half = s_local // 2
++    me = torch.distributed.get_rank(cp_group)
++    out = torch.empty(cp_size * s_local, b, hc, d, dtype=x.dtype, device=x.device)
++    blocks = x.view(s_local, b, cp_size, n_chunks, hc, d)
++
++    def final(chunk):
++        return out[chunk * half:(chunk + 1) * half]
++
++    ops, keep = [], []
++    for r in range(cp_size):
++        if r == me:
++            continue
++        send = blocks[:, :, r, g].contiguous()
++        keep.append(send)
++        peer = torch.distributed.get_global_rank(cp_group, r)
++        ops.append(torch.distributed.P2POp(torch.distributed.isend, send[:half], peer, cp_group))
++        ops.append(torch.distributed.P2POp(torch.distributed.isend, send[half:], peer, cp_group))
++        ops.append(torch.distributed.P2POp(torch.distributed.irecv, final(r), peer, cp_group))
++        ops.append(torch.distributed.P2POp(
++            torch.distributed.irecv, final(2 * cp_size - 1 - r), peer, cp_group))
++    works = _cp_p2p(ops)
++    final(me).copy_(blocks[:half, :, me, g])
++    final(2 * cp_size - 1 - me).copy_(blocks[half:, :, me, g])
++    return out, (works, keep)
++
++
++def _a2a_pre_finish(out, handle):
++    """Wait for a before-attention chunk: [s, b, hc, d] in sequence order."""
++    for w in handle[0]:
++        w.wait()
++    return out
++
++
++def _a2a_post_launch(x, cp_size, cp_group):
++    """Start the after-attention exchange of a head chunk x [s, b, hc, d]
++    (sequence order): rank r gets its two chunks r and 2*cp-1-r, which are
++    contiguous slices of x (no pack pass). Returns (recv, works); recv is
++    [cp, s/cp, b, hc, d] with this rank's own slot filled locally."""
++    s, b, hc, d = x.shape
++    half = s // (2 * cp_size)
++    me = torch.distributed.get_rank(cp_group)
++    recv = torch.empty(cp_size, 2 * half, b, hc, d, dtype=x.dtype, device=x.device)
++
++    def chunk(c):
++        return x[c * half:(c + 1) * half]
++
++    ops = []
++    for r in range(cp_size):
++        if r == me:
++            continue
++        peer = torch.distributed.get_global_rank(cp_group, r)
++        ops.append(torch.distributed.P2POp(torch.distributed.isend, chunk(r), peer, cp_group))
++        ops.append(torch.distributed.P2POp(
++            torch.distributed.isend, chunk(2 * cp_size - 1 - r), peer, cp_group))
++        ops.append(torch.distributed.P2POp(torch.distributed.irecv, recv[r, :half], peer, cp_group))
++        ops.append(torch.distributed.P2POp(torch.distributed.irecv, recv[r, half:], peer, cp_group))
++    works = _cp_p2p(ops)
++    recv[me, :half].copy_(chunk(me))
++    recv[me, half:].copy_(chunk(2 * cp_size - 1 - me))
++    return recv, (works, x)
++
++
++def _a2a_post_finish(recv, handle, full, g, n_chunks):
++    """Wait for an after-attention chunk and write it into full [s/cp, b, h, d]:
++    source rank r's heads land at [r*h/cp + g*hc, r*h/cp + (g+1)*hc)."""
++    for w in handle[0]:
++        w.wait()
++    cp, s_local, b, hc, d = recv.shape
++    full.view(s_local, b, cp, n_chunks, hc, d)[:, :, :, g].copy_(recv.movedim(0, 2))
++
++
++def _a2a_head_chunked_eligible(n_chunks, cp_size, q, k, fp8, fp8_recipe, is_bwd_fp8,
++                               use_fused_attention, qkv_format, attn_bias_type, dropout_p,
++                               softmax_type, window_size, return_max_logit):
++    return (
++        n_chunks > 1
++        and fp8
++        and fp8_recipe.delayed()
++        and is_bwd_fp8
++        and use_fused_attention
++        and qkv_format == "sbhd"
++        and attn_bias_type == "no_bias"
++        and dropout_p == 0.0
++        and softmax_type == "vanilla"
++        and (window_size is None or tuple(window_size) in ((-1, -1), (-1, 0)))
++        and not return_max_logit
++        and _fav3_fp8_fwd_adapter() is not None
++        and _fav3_fp8_bwd_adapter() is not None
++        and q.shape[-1] == 128
++        and q.shape[-2] % (cp_size * n_chunks) == 0
++        and k.shape[-2] % (cp_size * _a2a_kv_chunks(n_chunks, k, cp_size)) == 0
++    )
++
++
+ class AttnFuncWithCPAndQKVOA2A(torch.autograd.Function):
+     """
+     Attention implementation with context parallelism. Like Ulysses, applying A2A to QKVO.
+@@ -4735,6 +4862,12 @@
+ 
+         q_fp8, k_fp8, v_fp8 = (None, None, None)
+         fp8_meta_kwargs = {}
++        n_chunks = _a2a_head_chunks()
++        n_kv = _a2a_kv_chunks(n_chunks, k, cp_size)
++        head_chunked = _a2a_head_chunked_eligible(
++            n_chunks, cp_size, q, k, fp8, fp8_recipe, is_bwd_fp8, use_fused_attention,
++            qkv_format, attn_bias_type, dropout_p, softmax_type, window_size, return_max_logit,
++        )
+         if fp8:
+             assert use_fused_attention, "FP8 is only supported with FusedAttention backend!"
+             fused_attn_backend = FusedAttnBackend["FP8"]
+@@ -4760,6 +4893,16 @@
+         # [b, s//cp, h, d] -> [b, s, h//cp, d]
+         # [s//cp, b, h, d] -> [s, b, h//cp, d]
+         # [t//cp, h, d] -> [t, h//cp, d]
++        if head_chunked:
++            return AttnFuncWithCPAndQKVOA2A._forward_head_chunked(
++                ctx, n_chunks, n_kv, is_training, q, k, v, q_fp8, k_fp8, v_fp8, qkv_layout,
++                original_qkv_layout, qkv_format, orig_o_shape, orig_q_shape, orig_k_shape,
++                orig_v_shape, softmax_scale, attn_mask_type, attn_bias_type, dropout_p,
++                window_size, softmax_type, cp_group, cp_size, fp8_recipe, fwd_nominal_dtype,
++                is_input_fp8, is_output_fp8, QKV_quantizer, O_quantizer, S_quantizer,
++                dQKV_quantizer, dO_quantizer, dP_quantizer, fp8_meta,
++            )
++
+         chunk_ids_for_a2a = get_seq_chunk_ids_for_reordering_before_attn(cp_size, q.device)
+         q, k, v = flash_attn_a2a_communicate(
+             [q, k, v],
+@@ -5093,9 +5236,219 @@
+             return out_ret, max_logit
+         return out_ret
+ 
++    @staticmethod
++    def _forward_head_chunked(
++        ctx, n_chunks, n_kv, is_training, q, k, v, q_fp8, k_fp8, v_fp8, qkv_layout,
++        original_qkv_layout, qkv_format, orig_o_shape, orig_q_shape, orig_k_shape,
++        orig_v_shape, softmax_scale, attn_mask_type, attn_bias_type, dropout_p, window_size,
++        softmax_type, cp_group, cp_size, fp8_recipe, fwd_nominal_dtype, is_input_fp8,
++        is_output_fp8, QKV_quantizer, O_quantizer, S_quantizer, dQKV_quantizer, dO_quantizer,
++        dP_quantizer, fp8_meta,
++    ):
++        """The fp8 delayed-scaling FA3 all-to-all attention, pipelined over head chunks.
++
++        Chunk g+1's q/k/v exchange is launched before chunk g's attention is
++        enqueued, and chunk g's output exchange runs under chunk g+1's attention.
++        Heads are independent, so every head's result equals the single-exchange
++        path's; the O quantizer accumulates its amax over the chunks.
++        """
++        nvtx_range_push("transformer_engine.AttnFuncWithCPAndQKVOA2A.forward_head_chunked")
++        causal = "causal" in attn_mask_type
++        fav3_fwd = _fav3_fp8_fwd_adapter()
++        inputs = [x.view(orig) for x, orig in zip((q, k, v), (orig_q_shape, orig_k_shape, orig_v_shape))]
++        out_full = torch.empty(orig_o_shape, dtype=torch.uint8, device=q.device)
++
++        n_q = n_chunks
++        kv_of = lambda g: g * n_kv // n_q
++
++        def launch_q(g):
++            return _a2a_pre_launch(inputs[0], g, n_q, cp_size, cp_group)
++
++        def launch_kv(j):
++            return [_a2a_pre_launch(x, j, n_kv, cp_size, cp_group) for x in inputs[1:]]
++
++        q_parts, k_parts, v_parts, o_parts, lses = [], [], [], [], []
++        o_template = None
++        posts = []
++        kv_ready = {}
++        q_pending, q_next = launch_q(0), None
++        kv_pending = {0: launch_kv(0)}
++        for g in range(n_q):
++            j = kv_of(g)
++            if g + 1 < n_q:
++                q_next = launch_q(g + 1)
++                if kv_of(g + 1) != j:
++                    kv_pending[kv_of(g + 1)] = launch_kv(kv_of(g + 1))
++            qg = _a2a_pre_finish(*q_pending)
++            q_pending, q_next = q_next, None
++            if j not in kv_ready:
++                kv_ready[j] = tuple(_a2a_pre_finish(r, w) for r, w in kv_pending.pop(j))
++            kg, vg = kv_ready[j]
++            if g + 1 == n_q or kv_of(g + 1) != j:
++                k_parts.append(kg)
++                v_parts.append(vg)
++                kv_ready.pop(j)
++            q_part, k_part, v_part = [
++                Float8Tensor.make_like(t, data=x, dtype=fwd_nominal_dtype)
++                for t, x in zip((q_fp8, k_fp8, v_fp8), (qg, kg, vg))
++            ]
++            out_g, aux = fav3_fwd(
++                q_part, k_part, v_part, softmax_scale, qkv_layout, qkv_format, causal
++            )
++            out_g = O_quantizer(out_g)
++            if o_template is None:
++                o_template = out_g
++            posts.append((g, _a2a_post_launch(out_g._data, cp_size, cp_group)))
++            if is_training:
++                q_parts.append(qg)
++                o_parts.append(out_g._data)
++                lses.append(aux[0])
++            while len(posts) > 1:
++                gp, (r, w) = posts.pop(0)
++                _a2a_post_finish(r, w, out_full, gp, n_chunks)
++        for gp, (r, w) in posts:
++            _a2a_post_finish(r, w, out_full, gp, n_chunks)
++
++        out_fp8 = Float8Tensor.make_like(o_template, data=out_full, dtype=fwd_nominal_dtype)
++        out_ret = out_fp8 if is_output_fp8 else out_fp8.dequantize(dtype=fwd_nominal_dtype)
++
++        ctx.head_chunks = n_chunks
++        ctx.head_chunks_kv = n_kv
++        ctx.qkv_layout = qkv_layout
++        ctx.o_format = qkv_format
++        ctx.dqkv_layout = original_qkv_layout
++        ctx.dqkv_format = qkv_format
++        ctx.orig_q_shape, ctx.orig_k_shape = orig_q_shape, orig_k_shape
++        ctx.orig_v_shape, ctx.orig_o_shape = orig_v_shape, orig_o_shape
++        ctx.fp8 = True
++        if is_training:
++            ctx.save_for_backward(*q_parts, *k_parts, *v_parts, *o_parts, *lses)
++            empty = torch.empty(0, dtype=torch.uint8, device=q.device)
++            ctx.qkv_templates = [
++                Float8Tensor.make_like(t, data=empty, dtype=fwd_nominal_dtype)
++                for t in (q_fp8, k_fp8, v_fp8)
++            ]
++            ctx.o_template = Float8Tensor.make_like(o_template, data=empty, dtype=fwd_nominal_dtype)
++        ctx.cp_group = cp_group
++        ctx.dropout_p = dropout_p
++        ctx.softmax_scale = softmax_scale
++        ctx.attn_mask_type = attn_mask_type
++        ctx.attn_bias_type = attn_bias_type
++        ctx.window_size = window_size
++        ctx.softmax_type = softmax_type
++        ctx.use_fused_attention = True
++        ctx.fp8_meta = fp8_meta
++        ctx.is_input_fp8 = is_input_fp8
++        ctx.is_output_fp8 = is_output_fp8
++        ctx.fwd_nominal_dtype = fwd_nominal_dtype
++        ctx.fp8_recipe = fp8_recipe
++        ctx.dQKV_quantizer = dQKV_quantizer
++        ctx.dO_quantizer = dO_quantizer
++        ctx.dP_quantizer = dP_quantizer
++        ctx.QKV_quantizer = QKV_quantizer.copy()
++        ctx.O_quantizer = O_quantizer.copy()
++        ctx.S_quantizer = S_quantizer.copy() if S_quantizer is not None else None
++        ctx.QKV_quantizer.scale = QKV_quantizer.scale.clone()
++        ctx.O_quantizer.scale = O_quantizer.scale.clone()
++        if ctx.S_quantizer is not None:
++            ctx.S_quantizer.scale = S_quantizer.scale.clone()
++        nvtx_range_pop("transformer_engine.AttnFuncWithCPAndQKVOA2A.forward_head_chunked")
++        return out_ret
++
++    @staticmethod
++    def _backward_head_chunked(ctx, dout):
++        """Backward of _forward_head_chunked: the dO exchange of chunk g+1 and the
++        dQ/dK/dV exchange of chunk g run under chunk g's / g+1's FA3 backward.
++
++        The dO quantize and the dq/dk/dv dequantize fuse into the exchange
++        passes when their guards allow (bit-identical values and amax)."""
++        nvtx_range_push("transformer_engine.AttnFuncWithCPAndQKVOA2A.backward_head_chunked")
++        n = ctx.head_chunks
++        n_kv = getattr(ctx, "head_chunks_kv", n)
++        per_group = n // n_kv
++        cp_size = get_distributed_world_size(ctx.cp_group)
++        saved = ctx.saved_tensors
++        _parts, i = [], 0
++        for _cnt in (n, n_kv, n_kv, n, n):
++            _parts.append(list(saved[i:i + _cnt]))
++            i += _cnt
++        q_parts, k_parts, v_parts, o_parts, lses = _parts
++        nominal = ctx.fwd_nominal_dtype
++        fav3_bwd = _fav3_fp8_bwd_adapter()
++        if isinstance(dout, QuantizedTensorStorage):
++            dout_fp8 = dout
++        else:
++            dout_fp8 = ctx.dO_quantizer(dout)
++
++        def pre(j):
++            return _a2a_pre_launch(
++                dout_fp8._data.view(ctx.orig_o_shape), j, n_kv, cp_size, ctx.cp_group
++            )
++
++        fulls = None
++        q_t, k_t, v_t = ctx.qkv_templates
++        d_templates = None
++        posts = []
++        pending = pre(0)
++        for j in range(n_kv):
++            current = pending
++            if j + 1 < n_kv:
++                pending = pre(j + 1)
++            dout_g = _a2a_pre_finish(*current)
++            dout_part = Float8Tensor.make_like(dout_fp8, data=dout_g, dtype=nominal)
++            gq = j * per_group
++            q_src = q_parts[gq:gq + per_group]
++            o_src = o_parts[gq:gq + per_group]
++            l_src = lses[gq:gq + per_group]
++            q_cat = q_src[0] if per_group == 1 else torch.cat(q_src, dim=2)
++            o_cat = o_src[0] if per_group == 1 else torch.cat(o_src, dim=2)
++            l_cat = l_src[0] if per_group == 1 else torch.cat(l_src, dim=1)
++            q_part, k_part, v_part = [
++                Float8Tensor.make_like(t, data=x, dtype=nominal)
++                for t, x in zip((q_t, k_t, v_t), (q_cat, k_parts[j], v_parts[j]))
++            ]
++            out_part = Float8Tensor.make_like(ctx.o_template, data=o_cat, dtype=nominal)
++            dq, dk, dv = fav3_bwd(
++                ctx, q_part, k_part, v_part, out_part, None, dout_part,
++                [l_cat, None], quantize_output=True,
++            )
++            if d_templates is None:
++                d_templates = (dq, dk, dv)
++            if fulls is None:
++                fulls = [
++                    torch.empty(
++                        shape,
++                        dtype=torch.uint8,
++                        device=d_templates[0]._data.device,
++                    )
++                    for shape in (ctx.orig_q_shape, ctx.orig_k_shape, ctx.orig_v_shape)
++                ]
++            posts.append(
++                (j, [_a2a_post_launch(x._data, cp_size, ctx.cp_group) for x in (dq, dk, dv)])
++            )
++            while len(posts) > 1:
++                jp, works = posts.pop(0)
++                for full, (r, w) in zip(fulls, works):
++                    _a2a_post_finish(r, w, full, jp, n_kv)
++        for jp, works in posts:
++            for full, (r, w) in zip(fulls, works):
++                _a2a_post_finish(r, w, full, jp, n_kv)
++
++        dq, dk, dv = [
++            Float8Tensor.make_like(t, data=x, dtype=nominal) for t, x in zip(d_templates, fulls)
++        ]
++        if not ctx.is_input_fp8:
++            dq, dk, dv = combine_and_dequantize(
++                ctx.dqkv_layout, dq, dk, dv, src_nominal_dtype=nominal
++            )
++        nvtx_range_pop("transformer_engine.AttnFuncWithCPAndQKVOA2A.backward_head_chunked")
++        return (None, dq, dk, dv) + (None,) * 28
++
+     @staticmethod
+     def backward(ctx, dout, *_args):
+         # pylint: disable=missing-function-docstring
++        if getattr(ctx, "head_chunks", 1) > 1:
++            return AttnFuncWithCPAndQKVOA2A._backward_head_chunked(ctx, dout)
+         nvtx_range_push("transformer_engine.AttnFuncWithCPAndQKVOA2A.backward")
+         cp_size = get_distributed_world_size(ctx.cp_group)
+ 

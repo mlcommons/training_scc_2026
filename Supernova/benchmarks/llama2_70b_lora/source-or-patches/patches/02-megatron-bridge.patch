@@ -1,8 +1,154 @@
+diff --git a/src/megatron/bridge/data/datasets/gpt_sft.py b/src/megatron/bridge/data/datasets/gpt_sft.py
+index c7dfed473..a6f2c4725 100644
+--- a/src/megatron/bridge/data/datasets/gpt_sft.py
++++ b/src/megatron/bridge/data/datasets/gpt_sft.py
+@@ -1,4 +1,5 @@
+ # Copyright (c) 2024, NVIDIA CORPORATION.  All rights reserved.
++# Modifications Copyright (c) 2026, Billy Cao.
+ #
+ # Licensed under the Apache License, Version 2.0 (the "License");
+ # you may not use this file except in compliance with the License.
+@@ -226,6 +227,12 @@ class GPTSFTDataset(Dataset):
+ 
+         self._load_dataset()
+ 
++        # Prime the causal-mask cache before any dataloader worker forks, so all
++        # workers share it copy-on-write instead of each building a private copy
++        # (see _create_attention_mask).
++        if not self.is_test:
++            self._create_attention_mask(self.max_seq_length)
++
+         # Validate prompt template
+         self._maybe_validate_prompt_template()
+ 
+@@ -621,8 +628,15 @@ class GPTSFTDataset(Dataset):
+         """
+         # seq_length = len(input_ids)
+         # `attention_mask` has the shape of [1, seq_length, seq_length]
++        # Memoized: the mask depends only on max_length (constant with
++        # pad_to_max_length), so it is built once instead of per sample
++        # (ones + tril + compare temporaries) in every dataloader worker.
++        cached = getattr(self, "_cached_attn_mask", None)
++        if cached is not None and cached.shape[-1] == max_length:
++            return cached
+         attention_mask = torch.tril(torch.ones((max_length, max_length))).unsqueeze(0)
+         attention_mask = attention_mask < 0.5
++        self._cached_attn_mask = attention_mask
+         return attention_mask
+ 
+     def _collate_in_batch(self, batch: list[dict[str, Any]]) -> dict[str, Any]:
+diff --git a/src/megatron/bridge/training/eval.py b/src/megatron/bridge/training/eval.py
+index 3a60292c8..1c3b09e25 100644
+--- a/src/megatron/bridge/training/eval.py
++++ b/src/megatron/bridge/training/eval.py
+@@ -1,4 +1,5 @@
+ # Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
++# Modifications Copyright (c) 2026, Billy Cao.
+ #
+ # Licensed under the Apache License, Version 2.0 (the "License");
+ # you may not use this file except in compliance with the License.
+@@ -262,10 +263,6 @@ def evaluate(
+             )
+             fault_tolerance.on_eval_step_end(state)
+ 
+-            # Workaround: for FullIteration CG only. TODO: Filed #2569 to fix this.
+-            if not is_multimodule and is_full_iteration_cuda_graph(state.cfg.model):
+-                torch.cuda.synchronize()
+-
+             if should_fire(callback_manager, step_end_event):
+                 callback_manager.fire(
+                     step_end_event,
+diff --git a/src/megatron/bridge/training/initialize.py b/src/megatron/bridge/training/initialize.py
+index 841b4bd5a..85104ee80 100644
+--- a/src/megatron/bridge/training/initialize.py
++++ b/src/megatron/bridge/training/initialize.py
+@@ -1,4 +1,5 @@
+ # Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
++# Modifications Copyright (c) 2026, Billy Cao.
+ #
+ # Licensed under the Apache License, Version 2.0 (the "License");
+ # you may not use this file except in compliance with the License.
+@@ -131,6 +132,8 @@ def initialize_megatron(
+         dist_config=dist_config,
+         rng_config=rng_config,
+         micro_batch_size=train_config.micro_batch_size,
++        eval_micro_batch_size=cfg.validation.eval_micro_batch_size,
++        eval_context_parallel_size=cfg.dist.eval_context_parallel_size,
+         num_distributed_optimizer_instances=cfg.ddp.num_distributed_optimizer_instances,
+         get_embedding_ranks=get_embedding_ranks,
+         get_position_embedding_ranks=get_position_embedding_ranks,
+@@ -168,6 +171,8 @@ def torch_dist_init(
+     skip_mpu_initialization: bool,
+     restart_store: Optional[torch.distributed.Store] = None,
+     use_inprocess_restart: bool = False,
++    eval_micro_batch_size: int | None = None,
++    eval_context_parallel_size: int | None = None,
+ ) -> Callable[[], None] | ProcessGroupCollection | None:
+     """Initialize torch.distributed and dependent components.
+ 
+@@ -180,6 +185,8 @@ def torch_dist_init(
+         dist_config: Configuration for distributed initialization settings.
+         rng_config: Configuration for random number generation.
+         micro_batch_size: The micro batch size for JIT warmup.
++        eval_micro_batch_size: Validation micro batch size, used to size TP communication buffers.
++        eval_context_parallel_size: Context parallel size used during validation.
+         num_distributed_optimizer_instances: Number of parallel optimizer instances.
+         get_embedding_ranks: Optional function to determine embedding layer ranks.
+         get_position_embedding_ranks: Optional function to determine position embedding ranks.
+@@ -235,7 +242,12 @@ def torch_dist_init(
+     pg_collection = finish_mpu_init()
+ 
+     if model_config.tp_comm_overlap:
+-        _initialize_tp_communicators(model_config, micro_batch_size)
++        _initialize_tp_communicators(
++            model_config,
++            micro_batch_size,
++            eval_micro_batch_size=eval_micro_batch_size,
++            eval_context_parallel_size=eval_context_parallel_size,
++        )
+ 
+     return pg_collection
+ 
+@@ -327,7 +339,10 @@ def destroy_global_state() -> None:
+ 
+ 
+ def _initialize_tp_communicators(
+-    model_config: GPTModelProvider | T5ModelProvider | GPTModelConfig | HybridModelConfig, micro_batch_size: int
++    model_config: GPTModelProvider | T5ModelProvider | GPTModelConfig | HybridModelConfig,
++    micro_batch_size: int,
++    eval_micro_batch_size: int | None = None,
++    eval_context_parallel_size: int | None = None,
+ ) -> None:
+     """initializing the communicators with user buffers for high-performance tensor-model-parallel
+     communication overlap"""
+@@ -350,10 +365,19 @@ def _initialize_tp_communicators(
+     else:
+         ub_cfgs = {}
+ 
+-    input_shape = [
+-        (model_config.seq_length * micro_batch_size) // model_config.context_parallel_size,
+-        model_config.hidden_size,
+-    ]
++    train_tokens = (model_config.seq_length * micro_batch_size) // model_config.context_parallel_size
++    # Buffer capacity covers the largest per-rank token count over train and eval micro batch sizes.
++    ub_tokens = train_tokens
++    if eval_micro_batch_size is not None and eval_micro_batch_size > micro_batch_size:
++        cp_eval = eval_context_parallel_size or model_config.context_parallel_size
++        eval_numel = model_config.seq_length * eval_micro_batch_size
++        if eval_numel % cp_eval:
++            raise ValueError(
++                f"seq_length * eval_micro_batch_size ({eval_numel}) must be divisible by "
++                f"eval context parallel size ({cp_eval}) for tp_comm_overlap buffer sizing"
++            )
++        ub_tokens = max(train_tokens, eval_numel // cp_eval)
++    input_shape = [ub_tokens, model_config.hidden_size]
+ 
+     if is_te_min_version("2.8.0"):
+         from transformer_engine.pytorch import UserBufferQuantizationMode
 diff --git a/src/megatron/bridge/training/utils/train_utils.py b/src/megatron/bridge/training/utils/train_utils.py
-index ec3fdcc..a9f3a6b 100644
 --- a/src/megatron/bridge/training/utils/train_utils.py
 +++ b/src/megatron/bridge/training/utils/train_utils.py
-@@ -453,6 +453,8 @@ def reduce_max_stat_across_model_parallel_group(
+@@ -453,6 +453,8 @@
          float: The maximum value of the statistic across the model parallel group,
                 or None if all ranks had None.
      """
@@ -11,7 +157,7 @@ index ec3fdcc..a9f3a6b 100644
      if stat is None:
          stat = -1.0
      stat = torch.tensor([stat], dtype=torch.float32, device=torch.cuda.current_device())
-@@ -473,6 +475,8 @@ def logical_and_across_model_parallel_group(input: bool, mp_group: "TorchProcess
+@@ -473,6 +475,8 @@
      Returns:
          bool: The result of the logical AND across all ranks in the group.
      """

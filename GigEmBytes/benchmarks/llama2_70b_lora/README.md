@@ -1,184 +1,115 @@
-# `llama2_70b_lora` — SCC26 submission code (MLPerf Training v6.0, closed)
+# Llama 2 70B LoRA (MLPerf Training v6.0, Closed) - Texas A&M, Gig 'Em Bytes
 
-Code-only companion to the `GigEmBytes` SCC26 entry for the Llama-2-70B LoRA
-benchmark. It ships the launcher changes that made the NVIDIA NeMo recipe run on
-a single 8-GPU node, plus two small vendor changes carried by this tree.
+SC26 Student Cluster Competition submission. Single GPU node of 8x NVIDIA H200 NVL.
 
-**Naming:** the enclosing folder is `GigEmBytes/benchmarks/llama2_70b_lora/`
-(team Gig'Em Bytes, folder slug `GigEmBytes`). Use the same spelling in the
-PR title and commit message.
+## System
 
-This PR contains no result logs, no `systems/` JSON, no container image, and no
-vendored NeMo source.
+- Node: Dell PowerEdge XE7745, 2x AMD EPYC 9575F (64C each, SMT off), 1.5 TB DDR5-6400
+- Accelerators: 8x NVIDIA H200 NVL (141 GB HBM3e), two NVLink groups of 4
+- OS: Rocky Linux 9, kernel 5.14.0-687.59.1.el9_8; driver 580.196.07
+- Scheduler: Flux 0.81.0
+- Full details: `systems/student_system.json`
 
-## What is here
+## Software
 
-| path | purpose |
+- Container: `pytorch_26.04-py3.sif` (NVIDIA NGC PyTorch 26.04)
+- PyTorch 2.12.0a0, CUDA 13.2, cuDNN 9.21, NCCL 2.29.7
+- Transformer Engine 2.14.0, Triton 3.6.0, FlashAttention 2.7.4.post1
+- Megatron-Bridge commit `68d8bcc94cb5a25a36cf91413cb376103b2fa9dc` (loaded from source)
+- Megatron-LM commit `997896883b04dee1259d92889e7344be528eefa8` (Megatron-Core 0.18.0)
+- Training code and logging callbacks: `source-or-patches/train_grace/nemo/`
+
+## Configuration
+
+Set in `config.sh`:
+
+| Setting | Value |
 |---|---|
-| `config.sh` | Scored hyperparameters, parallelism, precision/communication environment, eval cadence. |
-| `run_and_time.sh` | Single-node 8-GPU entry point: Triton/libcuda fix, `torchrun`, `cache_clear`, real exit status. Runs exactly one seed per invocation. |
-| `source-or-patches/README` | Patch inventory and the vendor files checked unchanged. |
-| `source-or-patches/train.py.patch` | Lazy NVFP4 callback import. |
-| `source-or-patches/utils.py.patch` | torchrun → Slurm rank-variable normalization. |
-| `source-or-patches/run_lora70b_triton_fix.sh` | The scored Flux/Singularity launcher, site paths replaced by placeholders. |
+| Learning rate | 4e-4 |
+| Warmup steps | 11 |
+| Global batch size | 8 |
+| Max (LR decay) steps | 550 |
+| Parallelism | TP4, DP2, mini batch size 4 |
+| LoRA rank / alpha | 16 / 32 |
+| Gradient clip norm | 0.3 |
+| Weight decay | 1e-4 |
+| Precision | FP8 (Transformer Engine hybrid format, delayed recipe) on a BF16 base |
 
-## Configuration and why
+Target: validation loss <= 0.925 (logged as `eval_accuracy`).
+Evaluation runs every 384 samples (48 steps at GBS 8) after the initial skipped checks.
 
-One 8-GPU node. A 70B model in bf16 is about 138 GB before activations — more
-than a single 141 GB GPU can hold — so TP=1 is impossible and the model must be
-split at least four ways.
+## Data and checkpoint
 
-| knob | value |
-|---|---|
-| `TP` / `PP` / `CP` / `SP` | 4 / 1 / 1 / 0 |
-| `DP` | 2 |
-| `GBS` | 8 |
-| `MINIBS` / `MBS` | 4 / 1 |
-| precision | FP8 (NGC 26.04 PyTorch, Megatron-Bridge 26.04-alpha.rc1) |
-| `LR` / `WARMUP_STEPS` | 4e-4 / 11 |
-| `MAX_STEPS` | 550 (cosine horizon; runs stop at the first eval that meets the target) |
+Both come from the SCC 2026 MLCommons downloads (packed 8192-token GovReport dataset
+and the fused-QKV Llama 2 70B checkpoint). Download commands are in the SCC guide, section 7.3.
 
-TP=4 leaves roughly 35 GB of bf16 base weights per GPU, enough for the
-8k-sequence activations. DP=2 supplies the data parallelism; `MINIBS` is
-`GBS / DP = 4` because the vendor YAML defines `GBS = MINIBS * DP` (CP=1).
-
-`LR` is an unconstrained knob. The scored runs use 4e-4, the learning rate
-recorded in the v6.0 RCP data for this benchmark (`opt_base_learning_rate:
-0.0004`). Hotter LRs (5e-4, 6e-4, 7e-4) converged faster than the reference
-points and are rejected by the RCP rules; 4e-4 reproduces the reference
-convergence instead of gaming the target. `WARMUP_STEPS=11` is 2% of 550,
-matching the reference warmup shape.
-
-**Checkpoint.** The starting checkpoint is the converted Llama-2-70B checkpoint
-in torch_dist format at TP=2, PP=1. The runs use TP=4; Megatron's checkpoint
-loader reshards it from TP=2 to TP=4 at load time, so no separate conversion is
-needed. Point `CKPT` at the checkpoint as downloaded and keep `LOAD_CKPT=True`.
-
-**Scored runs.** One seed per invocation: `run_and_time.sh` takes `SEED` from
-the environment, runs that single seed, and exits with the training return code.
-A scheduler-side driver looped seeds 1–10 sequentially, one allocation per
-invocation, each writing its own `$LOGDIR/train_seed<SEED>_<timestamp>.log`.
-`run_and_time.sh` never submits jobs itself.
-
-## 1. Triton / libcuda fix
-
-### Symptom
-
-Inside the NGC 26.04 SIF, the bridge's startup `torch.compile(bias_swiglu)`
-aborts, and every rank prints:
-
-```
-torch._inductor.exc.InductorError: AssertionError: libcuda.so cannot found!
-Possible files are located at ['/usr/local/cuda/compat/lib/libcuda.so.1'].
-Please create a symlink of libcuda.so to any of the files.
-```
-
-The traceback ends in `triton/backends/nvidia/driver.py:libcuda_dirs()`. The
-SIF's `ldconfig` entry points at `/usr/local/cuda/compat/lib/libcuda.so.1`,
-which does not exist in the image. `TORCH_COMPILE_DISABLE=1` only hides the
-startup compile; TE's cross-entropy loss still launches a Triton kernel on the
-first training step and hits the same assertion.
-
-### Fix
-
-`--nv` injects the real driver at `/.singularity.d/libs/libcuda.so.1`. The
-launcher links it into a writable directory and points Triton at it:
+## How to run
 
 ```bash
-for d in /.singularity.d/libs /usr/local/nvidia/lib64; do
-  if [ -e "$d/libcuda.so.1" ]; then
-    mkdir -p "$LOGDIR/cuda_compat"
-    ln -sf "$d/libcuda.so.1" "$LOGDIR/cuda_compat/libcuda.so.1"
-    ln -sf "$d/libcuda.so.1" "$LOGDIR/cuda_compat/libcuda.so"
-    export TRITON_LIBCUDA_PATH=$LOGDIR/cuda_compat
-    break
-  fi
-done
+# one run (what run_and_time.sh does)
+SEED=<seed> bash run_and_time.sh
+
+# the 10 scored runs (one Flux job)
+flux batch -N1 -n1 -g8 --exclusive -q gpu -t 540 source-or-patches/run_scored_10_rand.sh
 ```
 
-`TRITON_LIBCUDA_PATH` is the only override needed. **Do not add `cuda_compat`
-to `LD_LIBRARY_PATH`.** That shadows the SIF compat `libcuda` with the raw host
-driver and segfaults `cuInit`: the job dies with `Fatal Python error:
-Segmentation fault` in `torch.cuda.is_available` and exits 139.
+`run_and_time.sh` is a copy of `source-or-patches/run_lora70b_triton_fix.sh`.
+Each of the 10 runs draws a fresh seed derived from the system clock (nanosecond time
+mixed with a random value), so all seeds are distinct. Each run is checked for
+`run_stop` success, `cache_clear`, `eval_accuracy <= 0.925` and a clean train exit
+before its log is kept as `result_N.txt`.
 
-## 2. Precision and communication flags
+## Local fixes
 
-The values below come from NVIDIA's `config_common.sh` and are reproduced
-verbatim in `config.sh` so the benchmark folder is self-contained:
+- Triton needs a libcuda that matches the container's CUDA 13.2 on the host driver
+  (CUDA 13.0). The run script symlinks `libcuda.so.1` into a `cuda_compat` directory and
+  sets `TRITON_LIBCUDA_PATH` to it. It deliberately does not put that directory on
+  `LD_LIBRARY_PATH`.
+- Extra Python packages are provided through `PYTHONPATH` (`pylibs_h200`).
+  Packages installed there: annotated_doc 0.0.5, antlr4-python3-runtime 4.9.3, anyio 4.15.1,
+  certifi 2026.10.19, click 8.5.0, filelock 4.2.4, fsspec 2026.9.0, h11 0.16.0, hf_xet 1.7.0,
+  httpcore 1.0.9, httpx 0.28.1, huggingface_hub 1.33.0, hydra-core 1.3.2, idna 3.20,
+  markdown-it-py 4.2.0, mdurl 0.1.2, mlperf_common 0.3, mlperf_logging 4.1.47, numpy 2.5.4,
+  omegaconf 2.3.0, packaging 26.3, pandas 3.0.6, pygments 2.21.0, python-dateutil 2.9.0.post0,
+  pyyaml 6.0.3, regex 2026.9.29, rich 15.0.0, safetensors 0.8.0, scipy 1.18.1,
+  shellingham 1.5.4, six 1.17.0, tokenizers 0.22.2, tqdm 4.70.1, transformers 5.5.4,
+  typer 0.27.3, typing_extensions 4.16.0.
+- Megatron-Bridge and Megatron-LM are used unmodified at the commits listed above
+  (clean git working trees).
+- `source-or-patches/train_grace/nemo/` is the NVIDIA NeMo / Megatron-Bridge Llama 2 70B LoRA
+  implementation with these local changes (each is commented in the code):
+  - `utils.py`: Flux/torchrun compatibility. torchrun exports `RANK`/`LOCAL_RANK` where the
+    original code reads `SLURM_PROCID`/`SLURM_LOCALID`, so the Slurm names are set from them.
+  - `utils.py`: the validation loss is reduced to the two-element `[sum_loss, count]` vector
+    that the Megatron-Bridge evaluation expects (no change in behaviour at `VAL_MBS=1`, which
+    is what the runs use).
+  - `train.py`: optional per-rank CPU pinning (`AFFINITY=1`), because Flux binds only the
+    parent task; each rank is pinned to the cores of the NUMA node of its GPU.
+  - `train.py`: the NVFP4 callback import is lazy; FP4 is not used in these runs.
+  - `config_common.sh`: `FP8_PARAM_GATHER=0`.
+- Runs are launched with torchrun inside Apptainer under Flux (`run_and_time.sh`), not with
+  the Slurm/Pyxis `run.sub` shipped with the original implementation.
 
-| group | flags |
-|---|---|
-| FP8 | `FP8=True`, `FP8_AMAX_ALGO=max`, `FP8_REDUCE_AMAX=True`, `FP8_AMAX_HISTORY=4`, `FP8_DPA=1`, `NVTE_FP8_DPA_BWD=1` |
-| LoRA A2A | `LORA_A2A=1` |
-| TE / fused ops | `USE_TE_OPS=1`, `FUSED_SINGLE_QKV_ROPE=1`, `NEMO_LORA_USE_THUNDER_DROPOUT=1`, `NVTE_NORM_FWD_USE_CUDNN=1`, `NVTE_NORM_BWD_USE_CUDNN=1` |
-| TP/NCCL | `MC_TP_OVERLAP_AG=True`, `MC_TP_OVERLAP_RS=True`, `MC_TP_OVERLAP_RS_DGRAD=True`, `NCCL_MIN_P2P_NCHANNELS=32`, `NCCL_MIN_CTAS=32`, `NCCL_NCHANNELS_PER_NET_PEER=32`, `NCCL_NVLS_ENABLE=1` |
+## Results
 
-One correction to the usual description: the YAML master switch
-`TP_COMM_OVERLAP` was **not** enabled in these runs — the logged training config
-shows `tp_comm_overlap=False`, despite the `MC_TP_OVERLAP_*` variables being
-exported by the vendor recipe. Set `TP_COMM_OVERLAP=True` to opt in;
-`conf/tp_overlap/h100tp4mbs1.yaml` is the matching config for this shape.
+Seeds and TTT (run_stop - run_start) per run:
 
-## 3. Eval cadence
+Runs 0-4 were submitted at hardware certification (cert1-submission1). Runs 5-9 come
+from the same Flux job, with unchanged system and hyper-parameters; this directory
+holds all ten.
 
-The v6.0 schedule is kept exactly:
+| Run | Seed | TTT (s) | Stop step | Final val. loss |
+|---|---|---|---|---|
+| 0 | 763539718 | 1984.6 | 384 | 0.92402 |
+| 1 | 801320609 | 1984.7 | 384 | 0.92389 |
+| 2 | 54871835 | 1988.3 | 384 | 0.92372 |
+| 3 | 1019020567 | 1987.0 | 384 | 0.92444 |
+| 4 | 1289223584 | 1985.9 | 384 | 0.92463 |
+| 5 | 1339199950 | 1987.0 | 384 | 0.92311 |
+| 6 | 1082460127 | 2246.5 | 432 | 0.92210 |
+| 7 | 1558731373 | 2249.3 | 432 | 0.92182 |
+| 8 | 1876230927 | 1984.0 | 384 | 0.92297 |
+| 9 | 879747156 | 1981.9 | 384 | 0.92369 |
 
-- `VAL_CHECK_INTERVAL=384`; the YAML computes
-  `val_check_interval = ceil(384 / GBS) = 48` steps at GBS=8.
-- `skip_evals = floor(0.125 * GBS + 2) = 3`; `train.py` sets
-  `start_eval_at_iter = (skip_evals + 1) * val_check_interval = 192`.
-- The first logged eval is therefore step **192**, then every **48 steps**:
-  192, 240, 288, …
-
-`config.sh` (sourced by `run_and_time.sh`) exports `SKIP_EVALS` only when the
-caller supplied a non-empty value and unsets it otherwise. Scored runs leave it
-unset so the YAML formula applies. An empty `SKIP_EVALS` would make the YAML's
-`oc.decode` fail, so the launcher removes it. `SKIP_EVALS=1` is only for short
-screens (first eval at step 96) and is not the scored schedule.
-
-## 4. How to run
-
-Prerequisites: one node with 8 GPUs, the GovReport data, the converted
-Llama-2-70B checkpoint, and a PyTorch NGC container that provides
-Megatron-Bridge 26.04-alpha.rc1
-(`68d8bcc94cb5a25a36cf91413cb376103b2fa9dc`, Megatron-LM
-`997896883b04dee1259d92889e7344be528eefa8`), `mlperf_logging` and
-`mlperf_common`.
-
-Apply the two vendor patches, then run one seed:
-
-```bash
-PATCHES=/path/to/benchmark/folder/source-or-patches
-cd /path/to/NVIDIA/benchmarks/llama2_70b_lora/implementations/nemo
-patch -p1 < "$PATCHES/train.py.patch"
-patch -p1 < "$PATCHES/utils.py.patch"
-
-cd /path/to/benchmark/folder
-IMPL_DIR=/path/to/NVIDIA/benchmarks/llama2_70b_lora/implementations/nemo \
-DATADIR=/path/to/gov_report \
-CKPT=/path/to/model_checkpoint \
-LOGDIR=$PWD/logs \
-SEED=1 ./run_and_time.sh
-```
-
-To let the script enter the SIF, also set
-`CONTAINER=/path/to/pytorch_26.04-py3.sif`. It binds `DATADIR`, `CKPT`,
-`LOGDIR`, the benchmark folder and `IMPL_DIR` into the container. Without a
-SIF, run the script inside the container yourself.
-
-Outputs: `$LOGDIR/train_seed<SEED>_<timestamp>.log` with the `:::MLLOG` lines,
-starting with `cache_clear`. The script exits with the training return code.
-Run one seed per invocation. On a scheduler, request one task holding all eight
-GPUs (e.g. Flux `-n 1 -g 8`; `-n 8 -g 8` requests 64).
-
-## 5. Vendor patches
-
-| file | change |
-|---|---|
-| `train.py` | Moves `from callback_nvfp4 import NVFP4Callback` inside the `if cfg.model.fp4:` branch. The module needs TE NVFP4 symbols that are absent from the fallback container, even when `FP4=False`. |
-| `utils.py` | Sets `SLURM_PROCID`/`SLURM_LOCALID` from torchrun's `RANK`/`LOCAL_RANK` (only if not already set). The rest of the file already reads the Slurm names for rank-0 logging, device selection and OOM profiling. |
-
-`config_common.sh`, `conf/`, the callbacks, `run.sub` and the vendor
-`run_and_time.sh` are byte-identical to the v6.0 release. The scored launcher's
-Flux metadata, provenance and power-logging blocks are site-local; the optional
-`power_logger.py` is not included in this code PR.
+Scoring uses the mean of the middle 8 runs (Olympic trimming).
+Result logs are in `results/student_system/llama2_70b_lora/`.

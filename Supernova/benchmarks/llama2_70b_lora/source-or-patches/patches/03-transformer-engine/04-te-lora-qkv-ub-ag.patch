@@ -1,0 +1,12 @@
+diff --git a/transformer_engine/pytorch/module/layernorm_linear.py b/transformer_engine/pytorch/module/layernorm_linear.py
+--- a/transformer_engine/pytorch/module/layernorm_linear.py
++++ b/transformer_engine/pytorch/module/layernorm_linear.py
+@@ -229,7 +229,7 @@
+         ub_obj = None
+         ub_type = None
+         ub_overlap_ag_fprop = (
+-            ub_overlap_ag_fprop and is_grad_enabled and not return_layernorm_output
++            ub_overlap_ag_fprop and is_grad_enabled and not return_layernorm_output_gathered
+         )
+         if ub_overlap_rs_fprop:
+             ub_obj = get_ub(ub_name + "_fprop", fp8)

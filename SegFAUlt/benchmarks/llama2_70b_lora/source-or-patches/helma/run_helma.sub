@@ -1,0 +1,274 @@
+#!/bin/bash -l
+#SBATCH --partition=h100
+#SBATCH --gres=gpu:h100:4
+#SBATCH --ntasks-per-node=4
+#SBATCH --cpus-per-task=32
+#SBATCH --exclusive
+#SBATCH --export=NONE
+#
+# Lanceur Helma du benchmark MLPerf Llama2-70B LoRA (implémentation NVIDIA NeMo / Megatron-Bridge).
+# Équivalent de nemo/run.sub, qui dépend de Pyxis/Enroot (absents de Helma) : ici chaque tâche lance
+# le conteneur avec Apptainer (tools/apptainer_launch.sh). Nœuds, durée, nom et placement sont
+# fournis par ./submit.sh :
+#     sbatch -N <nœuds> -t <minutes> run_helma.sub <configs/config_HelmaH100_Rxx_*.sh> [VAR=valeur ...]
+# Étapes et fichiers produits : docs/02_adaptation_helma.md et docs/04_lancer_suivre_analyser.md
+
+unset SLURM_EXPORT_ENV
+module purge > /dev/null 2>&1 || true
+# Rien de l'environnement Python/secret de l'hôte ne doit entrer dans le conteneur ni dans les logs.
+unset PYTHONPATH PYTHONHOME PYTHONSTARTUP VIRTUAL_ENV CONDA_PREFIX LD_PRELOAD HF_TOKEN HUGGING_FACE_HUB_TOKEN
+
+set -euo pipefail
+
+CONFIG_FILE=$(readlink -f "${1:?usage: sbatch run_helma.sub <config> [VAR=valeur ...]}")
+shift
+OVERRIDES=("$@")
+for kv in "${OVERRIDES[@]}"; do
+    [[ "${kv}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || { echo "ERREUR: surcharge invalide '${kv}' (attendu VAR=valeur)"; exit 2; }
+    export "${kv}"
+done
+source "${CONFIG_FILE}"
+for kv in "${OVERRIDES[@]}"; do export "${kv}"; done
+
+: "${RUN_ID:?}" "${RUN_NAME:?}" "${DGXNNODES:?}" "${WALLTIME_RUNANDTIME:?}"
+if [[ "${SLURM_JOB_NUM_NODES}" -ne "${DGXNNODES}" ]]; then
+    echo "ERREUR: la config demande ${DGXNNODES} nœud(s), le job en a ${SLURM_JOB_NUM_NODES}"; exit 2
+fi
+
+export MASTER_ADDR=$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n1)
+export MASTER_PORT="${MASTER_PORT:-29500}"
+export MODEL_NAME=llama2_70b_lora MODEL_FRAMEWORK=pytorch
+export RUN_DIR="${RESULTS_ROOT}/${RUN_ID}_${RUN_NAME}/${SLURM_JOB_ID}"
+export LOGDIR="${RUN_DIR}"
+export CODE_DIR="${RUN_DIR}/code"
+LAUNCH="${HELMA_DIR}/tools/apptainer_launch.sh"
+
+mkdir -p "${RUN_DIR}"/{logs,telemetry,config,data_index/train,data_index/val}
+ln -sf "$(scontrol show job "${SLURM_JOB_ID}" | awk -F= '/StdOut=/{print $2}')" "${RUN_DIR}/slurm.out"
+
+echo "PROLOG_START $(date +%s)"
+echo "Run ${RUN_ID} (${RUN_NAME}) | ${DGXSYSTEM} | job ${SLURM_JOB_ID} | nœuds ${SLURM_JOB_NODELIST} | dossier ${RUN_DIR}"
+
+# Instantané du code (monté sur /workspace/ft-llm) et de la config : chaque job garde exactement ce qu'il a exécuté.
+mkdir -p "${CODE_DIR}"
+tar -C "${NEMO_DIR}" --exclude=./scripts/models --exclude=./scripts/dataset --exclude='*.sif' \
+    --exclude=./outputs --exclude=__pycache__ -cf - . | tar -C "${CODE_DIR}" -xf -
+cp "${CONFIG_FILE}" "${HELMA_DIR}"/configs/config_*_common.sh "${RUN_DIR}/config/"
+printf '%s\n' "${OVERRIDES[@]}" > "${RUN_DIR}/config/overrides.txt"
+
+# -N/-n explicites : sinon srun hérite de SLURM_NTASKS (4 x nœuds) et ignore --ntasks-per-node=1
+# (constaté sur R01, job 910158 : mountcheck exécuté 8 fois, 4 télémétries par fichier).
+NNODES="${SLURM_JOB_NUM_NODES}"
+SRUN_NODE=(srun -N "${NNODES}" -n "${NNODES}" --ntasks-per-node=1 --cpu-bind=none --mpi=none)
+SRUN_ONE=(srun -N1 -n1 --cpu-bind=none --mpi=none)
+# --cpu-bind=none : Slurm lierait la tâche i aux cœurs 32i..32i+31, loin du GPU i sur Helma ;
+# la liaison correcte est faite par tools/bind_helma.sh dans le conteneur.
+SRUN_RANKS=(srun --ntasks-per-node="${DGXNGPU}" --cpus-per-task="${SLURM_CPUS_PER_TASK:-32}" \
+            --cpu-bind=none --mpi=none --kill-on-bad-exit=1)
+# Placement inégal des rangs (SCC26, 16/11) : RANK_LAYOUT="deuterium:8,tritium:4" = 8 rangs sur deuterium puis 4 sur
+# tritium (GPU 0-3 seulement ; l'îlot 4-7 de tritium provoque des Xid 95). srun --distribution=arbitrary place les rangs
+# dans l'ordre des lignes de SLURM_HOSTFILE, passé à ce seul srun (exporté, il imposerait l'ordre à tous les srun).
+# tools/apptainer_launch.sh fixe alors LOCAL_WORLD_SIZE et CUDA_VISIBLE_DEVICES de chaque rang selon son nœud.
+if [[ -n "${RANK_LAYOUT:-}" ]]; then
+    HOSTFILE="${RUN_DIR}/config/hostfile"
+    : > "${HOSTFILE}"
+    IFS=, read -ra _layout <<< "${RANK_LAYOUT}"
+    for _part in "${_layout[@]}"; do
+        for ((_i = 0; _i < ${_part##*:}; _i++)); do echo "${_part%%:*}" >> "${HOSTFILE}"; done
+    done
+    # pas de -N : srun le refuse avec --distribution=arbitrary (job 59, 16/11) ; les nœuds viennent du hostfile.
+    # --whole sans --cpus-per-task (SLURM_CPUS_PER_TASK/SLURM_TRES_PER_TASK hérités retirés) : avec 4 rangs x 48 cœurs,
+    # l'étape n'aurait sur tritium qu'une partie des cœurs, sans 176-191, et bind_helma.sh échouerait
+    # (« numactl: cpu argument 191 out of range », job 63) ; avec --whole chaque rang voit les 384 cœurs du nœud.
+    SRUN_RANKS=(env -u SLURM_CPUS_PER_TASK -u SLURM_TRES_PER_TASK SLURM_HOSTFILE="${HOSTFILE}" \
+                srun -n "$(wc -l < "${HOSTFILE}")" --distribution=arbitrary --whole \
+                --cpu-bind=none --mpi=none --kill-on-bad-exit=1)
+    echo "Placement des rangs : ${RANK_LAYOUT} ($(wc -l < "${HOSTFILE}") rangs)"
+fi
+
+TELEM_PID=""
+cleanup() {
+    [[ -n "${TELEM_PID}" ]] && kill "${TELEM_PID}" 2> /dev/null
+    # Gardiens de nœud : fichier stop -> ils relancent les services arrêtés et retirent le verrou SM, puis écrivent .done.
+    if [[ -n "${GUARD_PID:-}" ]]; then
+        touch "${GUARD_DIR}/stop"
+        for _t in $(seq 1 45); do
+            [[ $( (compgen -G "${GUARD_DIR}/*.done" || true) | wc -l) -ge "${NNODES}" ]] && break
+            sleep 2
+        done
+        kill "${GUARD_PID}" 2> /dev/null || true
+        wait "${GUARD_PID}" 2> /dev/null || true
+        cat "${RUN_DIR}"/logs/guard/*.log 2> /dev/null | tail -n 8 || true
+    fi
+    true
+}
+trap cleanup EXIT
+
+# Gardien de nœud (SCC26, 16/11, tools/node_guard.sh) : STOP_SERVICES="svc1,svc2" (services arrêtés pendant le job, ex.
+# ClusterCockpit), GPU_RESET=1 (reset des GPU au début), et retrait du verrou GPU_CLOCK_LOCK à la fin. Une tâche par nœud,
+# en arrière-plan ; elle remet tout en état à la fin du job ET à son annulation (SIGTERM de Slurm), ce qu'un srun lancé
+# depuis le trap ne peut plus faire une fois le job annulé (job 125). Lancé avant la limite de puissance : un reset l'efface.
+GUARD_PID=""
+if [[ -n "${STOP_SERVICES:-}" || "${GPU_RESET:-0}" == 1 || -n "${GPU_CLOCK_LOCK:-}" ]]; then
+    GUARD_DIR="${RUN_DIR}/logs/guard"
+    mkdir -p "${GUARD_DIR}"
+    srun --overlap -N "${NNODES}" -n "${NNODES}" --ntasks-per-node=1 -c 1 --cpu-bind=none --mpi=none \
+        bash "${HELMA_DIR}/tools/node_guard.sh" "${GUARD_DIR}" &
+    GUARD_PID=$!
+    _ready=0
+    for _t in $(seq 1 72); do
+        if compgen -G "${GUARD_DIR}/*.error" > /dev/null; then
+            cat "${GUARD_DIR}"/*.log 2> /dev/null || true; echo "ERREUR: gardien de nœud en échec -> arrêt avant tout essai"; exit 2
+        fi
+        _ready=$( (compgen -G "${GUARD_DIR}/*.ready" || true) | wc -l)
+        [[ "${_ready}" -ge "${NNODES}" ]] && break
+        sleep 5
+    done
+    [[ "${_ready}" -ge "${NNODES}" ]] || { echo "ERREUR: gardiens pas prêts après 6 min"; exit 2; }
+    cat "${GUARD_DIR}"/*.log 2> /dev/null || true
+fi
+
+# Limite de puissance des GPU posée au début du job (SCC26, 16/11) : GPU_POWER_LIMIT=<W> applique
+# `sudo -n nvidia-smi -pm 1 ; -pl <W>` sur tous les GPU de chaque nœud du job, AVANT l'inventaire (la limite figure donc
+# dans logs/system_info.txt et dans hw_notes du paquet). Les jobs HPL des autres membres changent la limite entre deux
+# jobs ; ici elle est fixe pour les 10 essais. Échec (droits, GPU à redémarrer) = arrêt avant tout essai.
+# Règle SCC (confirmée le 16/11) : la limite peut différer entre MLPerf et HPL/HPL-MxP ; elle reste fixe pendant les 10 essais.
+if [[ -n "${GPU_POWER_LIMIT:-}" ]]; then
+    "${SRUN_NODE[@]}" bash -c "sudo -n nvidia-smi -pm 1 > /dev/null && sudo -n nvidia-smi -pl ${GPU_POWER_LIMIT} > /dev/null \
+        && echo \"\$(hostname -s) : \$(nvidia-smi --query-gpu=power.limit --format=csv,noheader | sort | uniq -c | xargs)\"" \
+        2>&1 | tee "${RUN_DIR}/logs/power_limit.txt" \
+        || { echo "ERREUR: limite de puissance ${GPU_POWER_LIMIT} W non appliquée (voir logs/power_limit.txt)"; exit 2; }
+fi
+
+# Fréquence SM verrouillée (SCC26, 16/11) : GPU_CLOCK_LOCK=<MHz> -> `sudo -n nvidia-smi -lgc <MHz>,<MHz>` sur tous les
+# GPU de chaque nœud du job au début, `-rgc` à la fin (trap EXIT) pour ne pas laisser le verrou aux jobs suivants.
+# Même horloge sur tous les GPU : plus de GPU lent qui impose son rythme à son îlot TP4 (job 32 : 1020-1550 MHz à 450 W).
+CLOCK_LOCKED=0
+if [[ -n "${GPU_CLOCK_LOCK:-}" ]]; then
+    "${SRUN_NODE[@]}" bash -c "sudo -n nvidia-smi -lgc ${GPU_CLOCK_LOCK},${GPU_CLOCK_LOCK} > /dev/null \
+        && echo \"\$(hostname -s) : SM verrouillé à ${GPU_CLOCK_LOCK} MHz (nvidia-smi -lgc)\"" \
+        2>&1 | tee -a "${RUN_DIR}/logs/power_limit.txt" \
+        || { echo "ERREUR: fréquence ${GPU_CLOCK_LOCK} MHz non appliquée (voir logs/power_limit.txt)"; exit 2; }
+    CLOCK_LOCKED=1
+fi
+
+if [[ "${TELEMETRY}" == 1 ]]; then
+    srun --overlap -N "${NNODES}" -n "${NNODES}" --ntasks-per-node=1 -c 1 --cpu-bind=none --mpi=none bash -c \
+        'exec nvidia-smi --query-gpu=timestamp,index,utilization.gpu,utilization.memory,memory.used,memory.total,power.draw,power.limit,clocks.sm,temperature.gpu \
+         --format=csv,nounits -l "${TELEMETRY_INTERVAL}" > "${RUN_DIR}/telemetry/gpu_$(hostname -s).csv"' &
+    TELEM_PID=$!
+fi
+
+# ---------------------------------------------------------------- système et placement
+"${SRUN_NODE[@]}" bash -c '
+    echo "=== $(hostname -s) | $(. /etc/os-release; echo ${PRETTY_NAME}) | noyau $(uname -r)"
+    nvidia-smi --query-gpu=index,name,pci.bus_id,memory.total,power.limit,clocks.max.sm,driver_version --format=csv
+    for bus in $(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader | tr "[:upper:]" "[:lower:]"); do
+        d=/sys/bus/pci/devices/${bus:4}; echo "GPU ${bus:4} -> NUMA $(<${d}/numa_node), cœurs $(<${d}/local_cpulist)"
+    done
+    for d in /sys/class/infiniband/*; do
+        echo "HCA $(basename ${d}) link=$(cat ${d}/ports/1/link_layer 2>/dev/null) rate=$(cat ${d}/ports/1/rate 2>/dev/null) NUMA $(cat ${d}/device/numa_node)"
+    done' > "${RUN_DIR}/logs/system_info.txt" 2>&1 || true
+"${SRUN_ONE[@]}" nvidia-smi topo -m > "${RUN_DIR}/logs/topo.txt" 2>&1 || true
+{
+    echo "nœuds : ${SLURM_JOB_NODELIST}"
+    scontrol show topology 2> /dev/null | awk '/Level=0/' | while read -r line; do
+        sw=$(sed -n 's/.*SwitchName=\([^ ]*\).*/\1/p' <<< "${line}")
+        nodes=$(sed -n 's/.*Nodes=\([^ ]*\).*/\1/p' <<< "${line}")
+        [[ -z "${nodes}" ]] && continue
+        for n in $(scontrol show hostnames "${SLURM_JOB_NODELIST}"); do
+            if scontrol show hostnames "${nodes}" | grep -qx "${n}"; then echo "${n} -> switch leaf ${sw}"; fi
+        done
+    done
+} > "${RUN_DIR}/logs/placement.txt" || true
+cat "${RUN_DIR}/logs/placement.txt"
+
+# Garde-fou : le crash NCCL (« unspecified launch failure », nœuds drainés) n'a été observé qu'avec ce pilote,
+# quels que soient les réglages NCCL (docs/05 § 17). Arrêt avant toute utilisation GPU. BLOCKED_GPU_DRIVERS= pour désactiver.
+: "${BLOCKED_GPU_DRIVERS:=610.57.04}"
+if [[ -n "${BLOCKED_GPU_DRIVERS}" ]]; then
+    drivers=$("${SRUN_NODE[@]}" bash -c \
+        'echo "$(hostname -s) $(nvidia-smi --query-gpu=driver_version --format=csv,noheader | sort -u | tr "\n" " ")"' 2>/dev/null)
+    echo "${drivers}" | tee "${RUN_DIR}/logs/gpu_drivers.txt"
+    for drv in ${BLOCKED_GPU_DRIVERS//,/ }; do
+        if grep -qw "${drv}" <<< "${drivers}"; then
+            echo "ERREUR: pilote ${drv} détecté -> arrêt avant tout usage GPU (crash connu, docs/05 § 17)."
+            echo "Nœuds concernés : $(grep -w "${drv}" <<< "${drivers}" | awk '{print $1}' | paste -sd,) (à exclure avec sbatch --exclude=..., ou attendre la correction du pilote)."
+            exit 3
+        fi
+    done
+fi
+
+# ---------------------------------------------------------------- données locales (STAGE_TO_TMPDIR=1)
+if [[ "${STAGE_TO_TMPDIR}" == 1 ]]; then
+    echo "STAGING_START $(date +%s)"
+    "${SRUN_NODE[@]}" -c 16 bash "${HELMA_DIR}/tools/stage_to_tmpdir.sh" 2>&1 | tee "${RUN_DIR}/logs/staging.log"
+    echo "STAGING_STOP $(date +%s)"
+fi
+
+# ---------------------------------------------------------------- vérifications
+if [[ "${VERIFY_MOUNTS}" == 1 ]]; then
+    "${SRUN_NODE[@]}" "${LAUNCH}" python3 -m mlperf_common.mountcheck --verbosity 2 \
+        --expected_mounts_csv /workspace/ft-llm/expected-mounts.csv --mounts_to_verify DATADIR:/data CHECKPOINT:/ckpt \
+        2>&1 | tee "${RUN_DIR}/logs/mountcheck.log" || true
+fi
+
+if [[ "${NCCL_TEST}" == 1 ]]; then
+    echo "NCCL_CHECK_START $(date +%s)"
+    mkdir -p "${RUN_DIR}/logs/nccl_debug"
+    set +e
+    NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET,GRAPH NCCL_DEBUG_FILE=/results/logs/nccl_debug/%h.%p.log \
+    TORCH_NCCL_DUMP_ON_TIMEOUT=0 TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=60 \
+        "${SRUN_RANKS[@]}" --time="${NCCL_TEST_WALLTIME:-5}" \
+        "${LAUNCH}" slurm2pytorch /helma_tools/bind_helma.sh python3 -u /helma_tools/nccl_check.py \
+        2>&1 | tee "${RUN_DIR}/logs/nccl_check.log"
+    rc=${PIPESTATUS[0]}
+    set -e
+    echo "NCCL_CHECK_STOP $(date +%s) rc=${rc}"
+    if [[ ${rc} -ne 0 && "${ABORT_ON_PREFLIGHT_FAIL:-1}" == 1 ]]; then
+        echo "ERREUR: pré-test NCCL en échec -> arrêt avant l'entraînement (voir logs/nccl_check.log)"
+        exit 1
+    fi
+fi
+
+echo "PROLOG_STOP $(date +%s)"
+
+# ---------------------------------------------------------------- essais
+final_rc=0
+for idx in $(seq 1 "${NEXP}"); do
+    export SEED=$(( SEED_BASE - 1 + idx ))
+    export _experiment_index=${idx}
+    echo "EXPERIMENT_START $(date +%s)"
+    set +e
+    (
+        set +e
+        echo "Beginning trial ${idx} of ${NEXP} (seed ${SEED})"
+        env | grep -vE '^[A-Za-z0-9_]*(TOKEN|SECRET|PASSW|API_KEY|CREDENTIAL)[A-Za-z0-9_]*=' | sort \
+            > "${RUN_DIR}/logs/env_run${idx}.txt"
+        if [[ "${CLEAR_CACHES}" == 1 ]]; then
+            "${SRUN_NODE[@]}" "${LAUNCH}" python3 /helma_tools/drop_page_cache.py /data /ckpt
+            "${SRUN_ONE[@]}" "${LAUNCH}" python3 -c \
+                "from callback_logging import mllogger; mllogger.event(key=mllogger.constants.CACHE_CLEAR, value=True)"
+        fi
+        echo "RUNANDTIME_START $(date +%s)"
+        "${SRUN_RANKS[@]}" -l --time="${WALLTIME_RUNANDTIME}" "${LAUNCH}" slurm2pytorch ./run_and_time.sh
+        rc=$?
+        echo "RUNANDTIME_STOP $(date +%s) rc=${rc}"
+        exit ${rc}
+    ) 2>&1 | tee "${RUN_DIR}/mllog_run${idx}.log"
+    rc=${PIPESTATUS[0]}
+    set -e
+    if [[ ${rc} -ne 0 ]]; then final_rc=${rc}; fi
+
+    if [[ "${CHECK_COMPLIANCE}" == 1 ]]; then
+        "${SRUN_ONE[@]}" "${LAUNCH}" python3 -m mlperf_logging.compliance_checker --usage training \
+            --ruleset "${MLPERF_RULESET}" --log_output "/results/logs/compliance_run${idx}.out" \
+            "/results/mllog_run${idx}.log" > "${RUN_DIR}/logs/compliance_run${idx}.stdout" 2>&1 || true
+    fi
+    echo "EXPERIMENT_STOP $(date +%s) rc=${rc}"
+done
+
+python3 "${HELMA_DIR}/tools/summarize_results.py" "${RUN_DIR}" > "${RUN_DIR}/summary.md" 2>&1 || true
+cat "${RUN_DIR}/summary.md" || true
+echo "JOB_DONE $(date +%s) rc=${final_rc}"
+exit "${final_rc}"

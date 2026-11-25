@@ -1,0 +1,1297 @@
+diff --git a/build_tools/pytorch.py b/build_tools/pytorch.py
+index 93869eb0..36f90210 100644
+--- a/build_tools/pytorch.py
++++ b/build_tools/pytorch.py
+@@ -68,6 +68,18 @@ def setup_pytorch_extension(
+         ]
+     )
+ 
++    ub_deepgemm_root = os.getenv("NVTE_UB_DEEPGEMM_ROOT")
++    if ub_deepgemm_root is not None:
++        root = Path(ub_deepgemm_root)
++        include_dirs.extend(
++            [
++                root,
++                root / "deep_gemm" / "include",
++                root / "third-party" / "cutlass" / "include",
++                root / "third-party" / "deep_jit" / "include",
++            ]
++        )
++
+     # Compiler flags
+     cxx_flags = ["-O3", "-fvisibility=hidden"]
+     if debug_build_enabled():
+diff --git a/transformer_engine/common/comm_gemm_overlap/comm_gemm_overlap.cpp b/transformer_engine/common/comm_gemm_overlap/comm_gemm_overlap.cpp
+index 2eda743a..936dbc24 100644
+--- a/transformer_engine/common/comm_gemm_overlap/comm_gemm_overlap.cpp
++++ b/transformer_engine/common/comm_gemm_overlap/comm_gemm_overlap.cpp
+@@ -8,8 +8,11 @@
+ #include <transformer_engine/comm_gemm_overlap.h>
+ #include <transformer_engine/gemm.h>
+ #include <transformer_engine/transformer_engine.h>
++#include <transformer_engine/ub_deepgemm.h>
+ 
+ #include <cassert>
++
++#include <cstdlib>
+ #include <numeric>
+ 
+ #include "common/common.h"
+@@ -40,6 +43,33 @@ std::vector<size_t> shape_to_vector(const NVTEShape &shape) {
+   return std::vector<size_t>(shape.data, shape.data + shape.ndim);
+ }
+ 
++UbDeepGemmChunkFn g_ub_deepgemm_chunk_fn = nullptr;
++
++}  // namespace
++
++void set_ub_deepgemm_chunk_fn(UbDeepGemmChunkFn fn) { g_ub_deepgemm_chunk_fn = fn; }
++
++UbDeepGemmChunkFn get_ub_deepgemm_chunk_fn() { return g_ub_deepgemm_chunk_fn; }
++
++namespace {
++
++void ub_chunk_gemm(const TensorWrapper &A, bool transa, const TensorWrapper &B, bool transb,
++                   TensorWrapper &D, bool grad, const TensorWrapper &bias,
++                   const TensorWrapper &pre_gelu_out, bool accumulate,
++                   const TensorWrapper &workspace, bool use_split_accumulator, int math_sms,
++                   cudaStream_t stream) {
++  static const bool provider_enabled = [] {
++    const char *env = std::getenv("DEEPGEMM");
++    return env != nullptr && env[0] == '1';
++  }();
++  if (provider_enabled && !accumulate && !use_split_accumulator && bias.dptr() == nullptr &&
++      pre_gelu_out.numel() == 0 && get_ub_deepgemm_chunk_fn() != nullptr) {
++    if (get_ub_deepgemm_chunk_fn()(A, transa, B, transb, D, grad, math_sms, stream)) return;
++  }
++  nvte_cublas_gemm(A.data(), B.data(), D.data(), bias.data(), pre_gelu_out.data(), transa, transb,
++                   grad, workspace.data(), accumulate, use_split_accumulator, math_sms, stream);
++}
++
+ }  // namespace
+ 
+ bool ubuf_built_with_mpi() {
+@@ -423,12 +453,20 @@ void CommOverlapBase::initialize(const std::vector<size_t> &buffer_shape, DType
+     printf("!!! [UB] Register UBuf %d\n", _ub_reg);
+   }
+   _ubuf = TensorWrapper(buffer_ptr, buffer_shape, buffer_dtype);
++  _ubuf_capacity_tokens = buffer_shape[0];
++  _ubuf_tokens = buffer_shape[0];
++  _ubuf_hidden = buffer_shape[1];
+ 
+   NVTE_CHECK_CUDA(
+       cudaStreamCreateWithPriority(&_stream_comm, cudaStreamNonBlocking, _comm_priority));
+   NVTE_CHECK_CUDA(cudaEventCreateWithFlags(&_start_d2dcopy, 0));
+ }
+ 
++void CommOverlapBase::rewrap_ubufs(size_t tokens) {
++  _ubuf.set_rowwise_data(_ubuf.dptr(), _ubuf.dtype(),
++                         std::vector<size_t>{tokens, _ubuf_hidden});
++}
++
+ CommOverlapBase::~CommOverlapBase() {
+   if (!_with_cublasmp) {
+     cudaEventDestroy(_start_d2dcopy);
+@@ -449,6 +487,8 @@ void CommOverlapBase::bulk_overlap(const TensorWrapper &A, bool transa, const Te
+                                    cudaStream_t stream_main) {
+   NVTE_CHECK(!_with_cublasmp, "Bulk overlap is not supported with cuBlasMp");
+ 
++  if (rs_output.numel() > 0) set_ubuf_tokens(_tp_size * rs_output.numel() / _ubuf.size(1));
++
+   int ori_sms = _ub_comm->sms;
+   _ub_comm->use_ce = _use_ce;
+   _ub_comm->sms = _num_comm_sm;
+@@ -521,6 +561,8 @@ void CommOverlapBase::atomic_gemm_overlap_rs(const TensorWrapper &A, bool transa
+   _ub_comm->sms = _num_comm_sm;
+   _ub_comm->cga_size = _cga_size;
+ 
++  if (rs_output.numel() > 0) set_ubuf_tokens(_tp_size * rs_output.numel() / _ubuf.size(1));
++
+   // Get GEMM dimensions
+   size_t m = transa ? A.size(0) : A.size(1);
+   size_t k = transa ? A.size(1) : A.size(0);
+@@ -628,6 +670,7 @@ void CommOverlapBase::split_overlap_rs(const TensorWrapper &A, bool transa, cons
+   _ub_comm->use_ce = _use_ce;
+   _ub_comm->sms = _num_comm_sm;
+   _ub_comm->cga_size = _cga_size;
++  if (rs_output.numel() > 0) set_ubuf_tokens(_tp_size * rs_output.numel() / _ubuf.size(1));
+   size_t m = transa ? A.size(0) : A.size(1);
+   size_t k = transa ? A.size(1) : A.size(0);
+   size_t n = _ubuf.size(0);
+@@ -663,9 +706,9 @@ void CommOverlapBase::split_overlap_rs(const TensorWrapper &A, bool transa, cons
+     auto bias_chunk = maybe_get_bias_chunk(0);
+     auto workspace_chunk = get_tensor_chunk(workspace, 0, {workspace_size_chunk});
+ 
+-    nvte_cublas_gemm(input_a_chunk.data(), B.data(), output_chunk.data(), bias_chunk.data(),
+-                     pre_gelu_out.data(), transa, transb, grad, workspace_chunk.data(), accumulate,
+-                     use_split_accumulator, _math_sms, _stream_compute[0]);
++    ub_chunk_gemm(input_a_chunk, transa, B, transb, output_chunk, grad, bias_chunk, pre_gelu_out,
++                  accumulate, workspace_chunk, use_split_accumulator, _math_sms,
++                  _stream_compute[0]);
+ 
+     for (int i = 1; i < _num_splits; i++) {
+       input_a_chunk = get_tensor_chunk(A, i * input_a_chunk_size, input_a_chunk_shape);
+@@ -674,10 +717,9 @@ void CommOverlapBase::split_overlap_rs(const TensorWrapper &A, bool transa, cons
+       workspace_chunk = get_tensor_chunk(
+           workspace, (i % _stream_compute.size()) * workspace_size_chunk, {workspace_size_chunk});
+ 
+-      nvte_cublas_gemm(input_a_chunk.data(), B.data(), output_chunk.data(), bias_chunk.data(),
+-                       pre_gelu_out.data(), transa, transb, grad, workspace_chunk.data(),
+-                       accumulate, use_split_accumulator, _math_sms,
+-                       _stream_compute[i % _stream_compute.size()]);
++      ub_chunk_gemm(input_a_chunk, transa, B, transb, output_chunk, grad, bias_chunk, pre_gelu_out,
++                    accumulate, workspace_chunk, use_split_accumulator, _math_sms,
++                    _stream_compute[i % _stream_compute.size()]);
+ 
+       NVTE_CHECK_CUDA(
+           cudaEventRecord(_start_comm, _stream_compute[(i - 1) % _stream_compute.size()]));
+@@ -723,10 +765,9 @@ void CommOverlapBase::split_overlap_rs(const TensorWrapper &A, bool transa, cons
+       auto workspace_chunk = get_tensor_chunk(
+           workspace, (i % _stream_compute.size()) * workspace_size_chunk, {workspace_size_chunk});
+ 
+-      nvte_cublas_gemm(input_a_chunk.data(), B.data(), output_chunk.data(), bias_chunk.data(),
+-                       pre_gelu_out.data(), transa, transb, grad, workspace_chunk.data(),
+-                       accumulate, use_split_accumulator, _math_sms,
+-                       _stream_compute[i % _stream_compute.size()]);
++      ub_chunk_gemm(input_a_chunk, transa, B, transb, output_chunk, grad, bias_chunk, pre_gelu_out,
++                    accumulate, workspace_chunk, use_split_accumulator, _math_sms,
++                    _stream_compute[i % _stream_compute.size()]);
+ 
+       NVTE_CHECK_CUDA(cudaEventRecord(_start_comm, _stream_compute[i % _stream_compute.size()]));
+       NVTE_CHECK_CUDA(cudaStreamWaitEvent(_stream_comm, _start_comm, 0));
+@@ -842,6 +883,9 @@ void CommOverlapP2PBase::initialize(const std::vector<size_t> &buffer_shape, DTy
+   _prev_rank = (_tp_size + _rank + -1) % _tp_size + _rank_round_tp;
+ 
+   _self_chunk_id = _tp_id;
++  _ubuf_capacity_tokens = buffer_shape[0];
++  _ubuf_tokens = buffer_shape[0];
++  _ubuf_hidden = buffer_shape[1];
+   if (_atomic_gemm && !_is_reduce_scatter) {
+     _use_multiatomic_ag = getenv<bool>("NVTE_AG_P2P_MULTI_ATOMIC");
+     if (_use_multiatomic_ag) {
+@@ -877,10 +921,25 @@ CommOverlapP2PBase::~CommOverlapP2PBase() {
+   }
+ }
+ 
++void CommOverlapP2PBase::rewrap_ubufs(size_t tokens) {
++  const size_t chunk_rows = tokens / _tp_size;
++  const size_t chunk_bytes = chunk_rows * _ubuf_hidden * _ubuf.element_size();
++  char *base = reinterpret_cast<char *>(_ubuf.dptr());
++  for (size_t i = 0; i < _ubufs.size(); i++) {
++    _ubufs[i].set_rowwise_data(base + i * chunk_bytes, _ubufs[i].dtype(),
++                               std::vector<size_t>{chunk_rows, _ubuf_hidden});
++  }
++  _ubuf.set_rowwise_data(base, _ubuf.dtype(),
++                         std::vector<size_t>{chunk_rows * _ubufs.size(), _ubuf_hidden});
++}
++
+ void CommOverlapP2PBase::copy_into_buffer(cudaStream_t stream, const TensorWrapper &source,
+                                           bool local_chunk, bool rowwise) {
+   if (_with_cublasmp) return;  // cuBlasMp executes its own copy-into-buffer op
+ 
++  set_ubuf_tokens(local_chunk ? _tp_size * source.numel() / _ubuf.size(1)
++                              : _tp_size * source.numel() / (_ubufs.size() * _ubuf.size(1)));
++
+   // Check element size
+   const size_t element_size = source.element_size();
+   NVTE_CHECK(_ubuf.element_size() == element_size,
+@@ -950,6 +1009,8 @@ void CommOverlapP2PBase::atomic_gemm_overlap_ag(
+   _ub_comm->sms = _num_comm_sm;
+   _ub_comm->cga_size = _cga_size;
+ 
++  set_ubuf_tokens(B.numel() / _ubuf.size(1));
++
+   // Get GEMM dimensions between TN and NN input layouts
+   const size_t m = (transa) ? A.size(0) : A.size(1);
+   const size_t n_chunk = _ubufs[0].size(0);
+@@ -1061,6 +1122,7 @@ void CommOverlapP2PBase::split_overlap_ag(const TensorWrapper &A, bool transa,
+   _ub_comm->use_ce = _use_ce;
+   _ub_comm->sms = _num_comm_sm;
+   _ub_comm->cga_size = _cga_size;
++  set_ubuf_tokens(B.numel() / _ubuf.size(1));
+   // Get GEMM dimensions between TN and NN input layouts
+   const size_t m = (transa) ? A.size(0) : A.size(1);
+   const size_t k = (transa) ? A.size(1) : A.size(0);
+@@ -1133,10 +1195,9 @@ void CommOverlapP2PBase::split_overlap_ag(const TensorWrapper &A, bool transa,
+       auto workspace_chunk = get_tensor_chunk(
+           workspace, (i % _stream_compute.size()) * workspace_size_chunk, {workspace_size_chunk});
+ 
+-      nvte_cublas_gemm(A.data(), input_b_chunk.data(), output_chunk.data(), bias.data(),
+-                       aux_chunk.data(), transa, transb, grad, workspace_chunk.data(), accumulate,
+-                       use_split_accumulator, _math_sms,
+-                       _stream_compute[i % _stream_compute.size()]);
++      ub_chunk_gemm(A, transa, input_b_chunk, transb, output_chunk, grad, bias, aux_chunk,
++                    accumulate, workspace_chunk, use_split_accumulator, _math_sms,
++                    _stream_compute[i % _stream_compute.size()]);
+ 
+       if (i < num_steps - 1) {
+         // P2P communication
+@@ -1180,10 +1241,9 @@ void CommOverlapP2PBase::split_overlap_ag(const TensorWrapper &A, bool transa,
+       auto workspace_chunk = get_tensor_chunk(
+           workspace, (i % _stream_compute.size()) * workspace_size_chunk, {workspace_size_chunk});
+ 
+-      nvte_cublas_gemm(A.data(), input_b_chunk.data(), output_chunk.data(), bias.data(),
+-                       aux_chunk.data(), transa, transb, grad, workspace_chunk.data(), accumulate,
+-                       use_split_accumulator, _math_sms,
+-                       _stream_compute[i % _stream_compute.size()]);
++      ub_chunk_gemm(A, transa, input_b_chunk, transb, output_chunk, grad, bias, aux_chunk,
++                    accumulate, workspace_chunk, use_split_accumulator, _math_sms,
++                    _stream_compute[i % _stream_compute.size()]);
+ 
+       if (i < _tp_size - 1) {
+         // P2P communication
+@@ -1239,6 +1299,8 @@ void CommOverlapP2PBase::atomic_gemm_overlap_rs(
+   _ub_comm->sms = _num_comm_sm;
+   _ub_comm->cga_size = _cga_size;
+ 
++  if (rs_output.numel() > 0) set_ubuf_tokens(_tp_size * rs_output.numel() / _ubuf.size(1));
++
+   // Get communication and GEMM input chunk sizes
+   const int comm_bytes = _ubufs[0].bytes();
+ 
+@@ -1313,6 +1375,8 @@ void CommOverlapP2PBase::split_overlap_rs(const TensorWrapper &A, bool transa,
+   _ub_comm->sms = _num_comm_sm;
+   _ub_comm->cga_size = _cga_size;
+ 
++  if (rs_output.numel() > 0) set_ubuf_tokens(_tp_size * rs_output.numel() / _ubuf.size(1));
++
+   // Get communication and GEMM input chunk sizes
+   size_t m = transa ? A.size(0) : A.size(1);
+   size_t k = transa ? A.size(1) : A.size(0);
+@@ -1357,9 +1421,9 @@ void CommOverlapP2PBase::split_overlap_rs(const TensorWrapper &A, bool transa,
+           cudaEventRecord(_start_compute, _stream_compute[(i - 2) % _stream_compute.size()]));
+       NVTE_CHECK_CUDA(cudaStreamWaitEvent(_stream_compute[stream_id], _start_compute));
+     }
+-    nvte_cublas_gemm(A.data(), input_b_chunk.data(), output_chunk.data(), bias.data(),
+-                     pre_gelu_out.data(), transa, transb, grad, workspace_chunk.data(), accumulate,
+-                     use_split_accumulator, _math_sms, _stream_compute[stream_id]);
++    ub_chunk_gemm(A, transa, input_b_chunk, transb, output_chunk, grad, bias, pre_gelu_out,
++                  accumulate, workspace_chunk, use_split_accumulator, _math_sms,
++                  _stream_compute[stream_id]);
+ 
+     if (i > 0) {
+       // P2P communication chunk
+diff --git a/transformer_engine/common/comm_gemm_overlap/userbuffers/userbuffers.cu b/transformer_engine/common/comm_gemm_overlap/userbuffers/userbuffers.cu
+index 4bbbfc3c..54f23eaa 100644
+--- a/transformer_engine/common/comm_gemm_overlap/userbuffers/userbuffers.cu
++++ b/transformer_engine/common/comm_gemm_overlap/userbuffers/userbuffers.cu
+@@ -2537,7 +2537,7 @@ void userbuffers_recv(const int srchandler, const size_t srcoffset, const int ds
+     kuserbuffers_pushrecv<<<1, 1, 0, stream>>>(
+         comm->myrank, peer, comm->nvrank, peerlocal,
+         &comm->recv_id[peer * NVTE_MAX_REGIONS + dsthandler], reinterpret_cast<int *>(flagptr),
+-        signalonly || comm->sms, comm->ub_timeout,
++        signalonly ? 1 : comm->sms, comm->ub_timeout,
+         reinterpret_cast<int *>(0 ?  // temporary disable
+                                     GET_RECV_PTR_BY_INDEX(peer, comm, dsthandler, 1)
+                                   : nullptr),
+diff --git a/transformer_engine/common/include/transformer_engine/comm_gemm_overlap.h b/transformer_engine/common/include/transformer_engine/comm_gemm_overlap.h
+index b1a7447f..6991955a 100644
+--- a/transformer_engine/common/include/transformer_engine/comm_gemm_overlap.h
++++ b/transformer_engine/common/include/transformer_engine/comm_gemm_overlap.h
+@@ -75,6 +75,9 @@ class CommOverlapCore {
+   TensorWrapper _counter;
+   float *_ubuf_scale_inv;
+   bool _ubuf_scale_inv_initialized{false};
++  size_t _ubuf_capacity_tokens{0};
++  size_t _ubuf_tokens{0};
++  size_t _ubuf_hidden{0};
+ 
+   std::vector<cudaStream_t> _stream_compute;
+   cudaEvent_t _start_compute, _stop_compute, _start_comm, _stop_comm, _comm_launch_event;
+@@ -102,6 +105,20 @@ class CommOverlapCore {
+ 
+   void *get_ubuf_dptr() { return _ubuf.dptr(); }
+ 
++  virtual void rewrap_ubufs(size_t tokens) { NVTE_ERROR("rewrap_ubufs is not implemented."); }
++
++  void set_ubuf_tokens(size_t tokens) {
++    if (tokens == _ubuf_tokens) return;
++    NVTE_CHECK(tokens > 0 && tokens % _tp_size == 0,
++               "Userbuffer token count must be positive and divisible by the TP size (got ",
++               tokens, ")");
++    NVTE_CHECK(tokens <= _ubuf_capacity_tokens,
++               "Userbuffer token count (", tokens, ") exceeds the allocated capacity (",
++               _ubuf_capacity_tokens, ")");
++    rewrap_ubufs(tokens);
++    _ubuf_tokens = tokens;
++  }
++
+   void set_ubuf_scale_inv(float *scale_inv) {
+     _ubuf_scale_inv = scale_inv;
+     _ubuf_scale_inv_initialized = true;
+@@ -204,6 +221,8 @@ class CommOverlapBase : public CommOverlapCore {
+ 
+   virtual ~CommOverlapBase();
+ 
++  void rewrap_ubufs(size_t tokens) override;
++
+   /*
+   ** Bulk GEMM + COMM
+   ** This function assumes the communication input is pre-copied to _ubuf
+@@ -288,6 +307,8 @@ class CommOverlapP2PBase : public CommOverlapCore {
+                      bool atomic_gemm = false)
+       : CommOverlapCore(nccl_comm_ptr, tp_rank, tp_size, num_comm_sm, true, atomic_gemm) {}
+ 
++  void rewrap_ubufs(size_t tokens) override;
++
+   virtual ~CommOverlapP2PBase();
+ 
+   void copy_into_buffer(cudaStream_t stream, const TensorWrapper &source, bool local_chunk,
+diff --git a/transformer_engine/common/include/transformer_engine/ub_deepgemm.h b/transformer_engine/common/include/transformer_engine/ub_deepgemm.h
+new file mode 100644
+index 00000000..3164eeec
+--- /dev/null
++++ b/transformer_engine/common/include/transformer_engine/ub_deepgemm.h
+@@ -0,0 +1,23 @@
++/*************************************************************************
++ * Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++ *
++ * See LICENSE for license information.
++ ************************************************************************/
++
++#pragma once
++
++#include <cuda_runtime.h>
++
++#include "transformer_engine/transformer_engine.h"
++
++namespace transformer_engine {
++
++//
++using UbDeepGemmChunkFn = bool (*)(const TensorWrapper &A, bool transa, const TensorWrapper &B,
++                                   bool transb, TensorWrapper &D, bool grad, int math_sms,
++                                   cudaStream_t stream);
++
++void set_ub_deepgemm_chunk_fn(UbDeepGemmChunkFn fn);
++UbDeepGemmChunkFn get_ub_deepgemm_chunk_fn();
++
++}  // namespace transformer_engine
+diff --git a/transformer_engine/common/libtransformer_engine.version b/transformer_engine/common/libtransformer_engine.version
+index ccd18fc1..058c7857 100644
+--- a/transformer_engine/common/libtransformer_engine.version
++++ b/transformer_engine/common/libtransformer_engine.version
+@@ -19,6 +19,9 @@
+ 			*transformer_engine::CommOverlapBase*;
+ 			*transformer_engine::CommOverlapP2PBase*;
+ 			*transformer_engine::CommOverlapCore*;
++			transformer_engine::set_ub_deepgemm_chunk_fn*;
++			transformer_engine::update_tensor_scale_inv*;
++			transformer_engine::get_ub_deepgemm_chunk_fn*;
+ 			*nvshmem_wait_on_stream*;
+ 			*nvshmemi_init_thread*
+ 		};
+diff --git a/transformer_engine/pytorch/attention/dot_product_attention/backends.py b/transformer_engine/pytorch/attention/dot_product_attention/backends.py
+index 9a339233..65f38a32 100644
+--- a/transformer_engine/pytorch/attention/dot_product_attention/backends.py
++++ b/transformer_engine/pytorch/attention/dot_product_attention/backends.py
+@@ -1683,39 +1683,53 @@ def _fused_attn_forward_impl(
+         #                                     fp8_dtype = tex.DType.kFloat8E4M3
+         # Float8CurrentScaling: torch.Tensor; dtype = torch.float16 or torch.bfloat16
+         # MXFP8BlockScaling:    torch.Tensor; dtype = torch.float16 or torch.bfloat16
+-        out_, aux_ctx_tensors, *_ = fused_attn_fwd(
+-            is_training,
+-            args.max_seqlen_q,
+-            args.max_seqlen_kv,
+-            args.cu_seqlens_q,
+-            args.cu_seqlens_kv,
+-            q_fp8,
+-            k_fp8,
+-            v_fp8,
+-            out_nominal_dtype,
+-            fused_attention_backend,
+-            args.attn_bias,
+-            args.cu_seqlens_q_padded,
+-            args.cu_seqlens_kv_padded,
+-            None,
+-            None,
+-            S_quantizer,
+-            O_quantizer,
+-            args.attn_scale,
+-            args.dropout_p,
+-            args.fast_zero_fill,
+-            qkv_layout,
+-            o_format,
+-            qkv_scale_inv_format,
+-            args.attn_bias_type,
+-            args.attn_mask_type,
+-            args.softmax_type,
+-            args.window_size,
+-            args.bottom_right_diagonal,
+-            args.rng_gen,
+-            args.softmax_offset,
+-            cuda_graph=is_graph_capturing(),
+-        )
++        _fav3_fwd = _fav3_fp8_fwd_adapter()
++        if _fav3_fwd is not None and _fav3_fp8_fwd_supported(
++            args, fp8_recipe, qkv_layout, q_fp8, k_fp8, v_fp8
++        ):
++            out_, aux_ctx_tensors = _fav3_fwd(
++                q_fp8,
++                k_fp8,
++                v_fp8,
++                args.attn_scale,
++                qkv_layout,
++                o_format,
++                "causal" in args.attn_mask_type,
++            )
++        else:
++            out_, aux_ctx_tensors, *_ = fused_attn_fwd(
++                is_training,
++                args.max_seqlen_q,
++                args.max_seqlen_kv,
++                args.cu_seqlens_q,
++                args.cu_seqlens_kv,
++                q_fp8,
++                k_fp8,
++                v_fp8,
++                out_nominal_dtype,
++                fused_attention_backend,
++                args.attn_bias,
++                args.cu_seqlens_q_padded,
++                args.cu_seqlens_kv_padded,
++                None,
++                None,
++                S_quantizer,
++                O_quantizer,
++                args.attn_scale,
++                args.dropout_p,
++                args.fast_zero_fill,
++                qkv_layout,
++                o_format,
++                qkv_scale_inv_format,
++                args.attn_bias_type,
++                args.attn_mask_type,
++                args.softmax_type,
++                args.window_size,
++                args.bottom_right_diagonal,
++                args.rng_gen,
++                args.softmax_offset,
++                cuda_graph=is_graph_capturing(),
++            )
+ 
+         # out_fp8: Float8Tensor/MXFP8Tensor; dtype = torch.float16 or torch.bfloat16
+         #                        fp8_dtype = tex.DType.kFloat8E4M3
+@@ -2004,6 +2018,75 @@ def _fused_attn_setup_ctx(
+     )
+ 
+ 
++class _Fav3BwdCtx:
++    """View of FusedAttnBwdArgs with the ctx-style attributes fav3_fp8_bwd reads."""
++
++    class _Recipe:
++        def __init__(self, delayed):
++            self._delayed = delayed
++
++        def delayed(self):
++            return self._delayed
++
++    def __init__(self, args):
++        self._args = args
++        from transformer_engine.pytorch.tensor.float8_tensor import Float8Quantizer
++
++        self.fp8_recipe = self._Recipe(isinstance(args.dO_quantizer, Float8Quantizer))
++
++    def __getattr__(self, name):
++        return getattr(self._args, name)
++
++
++if os.getenv("NVTE_FAV3_FP8_BWD", "0") == "1" and "NVTE_FP8_DPA_BWD" not in os.environ:
++    os.environ["NVTE_FP8_DPA_BWD"] = "1"
++
++
++def _fav3_fp8_bwd_adapter():
++    """Return the flash_attn_3 fp8 backward adapter when NVTE_FAV3_FP8_BWD=1."""
++    if os.getenv("NVTE_FAV3_FP8_BWD", "0") != "1":
++        return None
++    if os.environ.get("NVTE_FP8_DPA_BWD", "1") != "1":
++        raise RuntimeError(
++            "NVTE_FAV3_FP8_BWD=1 requires NVTE_FP8_DPA_BWD=1 (the FA3 fp8 "
++            "backward consumes the e4m3 q/k/v/out saved under that flag); "
++            f"got NVTE_FP8_DPA_BWD={os.environ['NVTE_FP8_DPA_BWD']}"
++        )
++    from fav3_fp8_bwd import fav3_attention_bwd
++
++    def _run(args, *rest):
++        return fav3_attention_bwd(_Fav3BwdCtx(args), *rest)
++
++    return _run
++
++
++def _fav3_fp8_fwd_adapter():
++    """Return the flash_attn_3 fp8 forward adapter when NVTE_FAV3_FP8_FWD=1."""
++    if os.getenv("NVTE_FAV3_FP8_FWD", "0") != "1":
++        return None
++    from fav3_fp8_bwd import fav3_attention_fwd
++
++    return fav3_attention_fwd
++
++
++def _fav3_fp8_fwd_supported(args, fp8_recipe, qkv_layout, q_fp8, k_fp8, v_fp8):
++    """Whether the FA3 fp8 forward can take this call (else cuDNN runs)."""
++    if not fp8_recipe.delayed():
++        return False
++    if args.attn_bias_type != "no_bias" or args.dropout_p != 0.0 or args.softmax_type != "vanilla":
++        return False
++    if args.bottom_right_diagonal:
++        return False
++    if args.window_size is not None and tuple(args.window_size) not in ((-1, -1), (-1, 0)):
++        return False
++    src_format = qkv_layout.split("_")[0].replace("3", "").replace("2", "")
++    if src_format not in ("sbhd", "bshd"):
++        return False
++    if q_fp8.shape[-1] != 128 or v_fp8.shape[-1] != 128:
++        return False
++    return q_fp8.shape[-2] % v_fp8.shape[-2] == 0
++
++
+ def _fused_attn_backward_impl(
+     args: FusedAttnBwdArgs,
+ ) -> Tuple[Optional[torch.Tensor], ...]:
+@@ -2128,41 +2211,49 @@ def _fused_attn_backward_impl(
+                 if args.qkv_type == "mxfp8":
+                     out_ = out
+                     aux_ctx_tensors.append(d_out)
+-                dq_, dk_, dv_, *rest = fused_attn_bwd(
+-                    args.max_seqlen_q,
+-                    args.max_seqlen_kv,
+-                    cu_seqlens_q,
+-                    cu_seqlens_kv,
+-                    q_fp8,
+-                    k_fp8,
+-                    v_fp8,
+-                    out_,
+-                    d_out_fp8,
+-                    dqkv_nominal_dtype,
+-                    aux_ctx_tensors,
+-                    args.fused_attention_backend,
+-                    cu_seqlens_q_padded,
+-                    cu_seqlens_kv_padded,
+-                    args.S_quantizer,
+-                    args.dP_quantizer,
+-                    args.dQKV_quantizer,
+-                    args.attn_scale,
+-                    args.dropout_p,
+-                    args.fast_zero_fill,
+-                    args.qkv_layout,
+-                    args.o_format,
+-                    do_format,
+-                    args.dqkv_layout,
+-                    args.qkv_scale_inv_format,
+-                    do_scale_inv_format,
+-                    args.attn_bias_type,
+-                    args.attn_mask_type,
+-                    args.softmax_type,
+-                    args.window_size,
+-                    args.bottom_right_diagonal,
+-                    args.deterministic,
+-                    is_graph_capturing(),
+-                )
++                _fav3_bwd = _fav3_fp8_bwd_adapter()
++                if _fav3_bwd is not None:
++                    dq_, dk_, dv_ = _fav3_bwd(
++                        args, q_fp8, k_fp8, v_fp8, out_, d_out, d_out_fp8, aux_ctx_tensors,
++                        quantize_output=True,
++                    )
++                    rest = [None, None]
++                else:
++                    dq_, dk_, dv_, *rest = fused_attn_bwd(
++                        args.max_seqlen_q,
++                        args.max_seqlen_kv,
++                        cu_seqlens_q,
++                        cu_seqlens_kv,
++                        q_fp8,
++                        k_fp8,
++                        v_fp8,
++                        out_,
++                        d_out_fp8,
++                        dqkv_nominal_dtype,
++                        aux_ctx_tensors,
++                        args.fused_attention_backend,
++                        cu_seqlens_q_padded,
++                        cu_seqlens_kv_padded,
++                        args.S_quantizer,
++                        args.dP_quantizer,
++                        args.dQKV_quantizer,
++                        args.attn_scale,
++                        args.dropout_p,
++                        args.fast_zero_fill,
++                        args.qkv_layout,
++                        args.o_format,
++                        do_format,
++                        args.dqkv_layout,
++                        args.qkv_scale_inv_format,
++                        do_scale_inv_format,
++                        args.attn_bias_type,
++                        args.attn_mask_type,
++                        args.softmax_type,
++                        args.window_size,
++                        args.bottom_right_diagonal,
++                        args.deterministic,
++                        is_graph_capturing(),
++                    )
+                 # dq, dk, dv:             torch.Tensor; dtype = torch.float16 or torch.bfloat16
+                 dq, dk, dv = dq_, dk_, dv_
+                 is_quantized_tensor = isinstance(dq_, QuantizedTensorStorage)
+diff --git a/transformer_engine/pytorch/attention/dot_product_attention/context_parallel.py b/transformer_engine/pytorch/attention/dot_product_attention/context_parallel.py
+index 9e181acb..d9a10e70 100644
+--- a/transformer_engine/pytorch/attention/dot_product_attention/context_parallel.py
++++ b/transformer_engine/pytorch/attention/dot_product_attention/context_parallel.py
+@@ -4561,6 +4561,24 @@ class AttnFuncWithCPAndKVAllGather(torch.autograd.Function):
+         )
+ 
+ 
++def _fav3_fp8_bwd_adapter():
++    """Return the flash_attn_3 fp8 backward adapter when NVTE_FAV3_FP8_BWD=1."""
++    if os.getenv("NVTE_FAV3_FP8_BWD", "0") != "1":
++        return None
++    from fav3_fp8_bwd import fav3_attention_bwd
++
++    return fav3_attention_bwd
++
++
++def _fav3_fp8_fwd_adapter():
++    """Return the flash_attn_3 fp8 forward adapter when NVTE_FAV3_FP8_FWD=1."""
++    if os.getenv("NVTE_FAV3_FP8_FWD", "0") != "1":
++        return None
++    from fav3_fp8_bwd import fav3_attention_fwd
++
++    return fav3_attention_fwd
++
++
+ class AttnFuncWithCPAndQKVOA2A(torch.autograd.Function):
+     """
+     Attention implementation with context parallelism. Like Ulysses, applying A2A to QKVO.
+@@ -4804,34 +4822,60 @@ class AttnFuncWithCPAndQKVOA2A(torch.autograd.Function):
+                         Float8Tensor.make_like(x, data=y, dtype=fwd_nominal_dtype)
+                         for x, y in zip([q_fp8, k_fp8, v_fp8], [q_part, k_part, v_part])
+                     ]
+-            out_, aux_ctx_tensors, *max_logit = fused_attn_fwd(
+-                is_training,
+-                max_seqlen_q,
+-                max_seqlen_kv,
+-                cu_seqlens_q,
+-                cu_seqlens_kv,
+-                q_part,
+-                k_part,
+-                v_part,
+-                fwd_nominal_dtype,
+-                fused_attn_backend,
+-                attn_scale=softmax_scale,
+-                dropout=dropout_p,
+-                qkv_layout=qkv_layout,
+-                o_format=o_format,
+-                attn_mask_type=attn_mask_type,
+-                attn_bias_type=attn_bias_type,
+-                attn_bias=attn_bias,
+-                cu_seqlens_q_padded=cu_seqlens_q_padded,
+-                cu_seqlens_kv_padded=cu_seqlens_kv_padded,
+-                window_size=window_size,
+-                **fp8_meta_kwargs,
+-                softmax_type=softmax_type,
+-                softmax_offset=softmax_offset,
+-                return_max_logit=return_max_logit,
+-                cuda_graph=is_graph_capturing(),
+-                qkv_scale_inv_format=qkv_scale_inv_format,
+-            )
++            _fav3_fwd = _fav3_fp8_fwd_adapter()
++            if (
++                _fav3_fwd is not None
++                and fp8
++                and fp8_recipe.delayed()
++                and attn_bias_type == "no_bias"
++                and dropout_p == 0.0
++                and softmax_type == "vanilla"
++                and (window_size is None or tuple(window_size) in ((-1, -1), (-1, 0)))
++                and q_part.shape[-1] == 128
++                and v_part.shape[-1] == 128
++                and q_part.shape[-2] % v_part.shape[-2] == 0
++            ):
++                out_, aux_ctx_tensors = _fav3_fwd(
++                    q_part,
++                    k_part,
++                    v_part,
++                    softmax_scale,
++                    qkv_layout,
++                    o_format,
++                    "causal" in attn_mask_type,
++                )
++                if fp8 and fp8_recipe.delayed():
++                    out_ = O_quantizer(out_)
++                max_logit = []
++            else:
++                out_, aux_ctx_tensors, *max_logit = fused_attn_fwd(
++                    is_training,
++                    max_seqlen_q,
++                    max_seqlen_kv,
++                    cu_seqlens_q,
++                    cu_seqlens_kv,
++                    q_part,
++                    k_part,
++                    v_part,
++                    fwd_nominal_dtype,
++                    fused_attn_backend,
++                    attn_scale=softmax_scale,
++                    dropout=dropout_p,
++                    qkv_layout=qkv_layout,
++                    o_format=o_format,
++                    attn_mask_type=attn_mask_type,
++                    attn_bias_type=attn_bias_type,
++                    attn_bias=attn_bias,
++                    cu_seqlens_q_padded=cu_seqlens_q_padded,
++                    cu_seqlens_kv_padded=cu_seqlens_kv_padded,
++                    window_size=window_size,
++                    **fp8_meta_kwargs,
++                    softmax_type=softmax_type,
++                    softmax_offset=softmax_offset,
++                    return_max_logit=return_max_logit,
++                    cuda_graph=is_graph_capturing(),
++                    qkv_scale_inv_format=qkv_scale_inv_format,
++                )
+             # construct out_part for backward
+             # out_fp8 and out_f16 store the FP8 or F16 tensor for backward saves
+             out_fp8 = out_
+@@ -5188,9 +5232,24 @@ class AttnFuncWithCPAndQKVOA2A(torch.autograd.Function):
+                         [(dout, ctx.dO_quantizer)],
+                         do_format,
+                     )
+-            dq, dk, dv, *rest = fused_attn_bwd(
+-                ctx.max_seqlen_q,
+-                ctx.max_seqlen_kv,
++            _fav3_bwd = _fav3_fp8_bwd_adapter() if ctx.fp8 else None
++            if _fav3_bwd is not None:
++                dq, dk, dv = _fav3_bwd(
++                    ctx,
++                    q_part,
++                    k_part,
++                    v_part,
++                    out_part,
++                    None,
++                    dout_part,
++                    aux_ctx_tensors,
++                    quantize_output=True,
++                )
++                rest = [None, None]
++            else:
++                dq, dk, dv, *rest = fused_attn_bwd(
++                    ctx.max_seqlen_q,
++                    ctx.max_seqlen_kv,
+                 cu_seqlens_q,
+                 cu_seqlens_kv,
+                 q_part,
+@@ -5218,7 +5277,7 @@ class AttnFuncWithCPAndQKVOA2A(torch.autograd.Function):
+                 do_scale_inv_format=do_scale_inv_format,
+                 **fp8_meta_kwargs,
+                 softmax_type=ctx.softmax_type,
+-            )
++                )
+             if all(isinstance(x, Float8TensorStorage) for x in [dq, dk, dv]):
+                 dq_fp8, dk_fp8, dv_fp8 = dq, dk, dv
+                 dq, dk, dv = [x._data for x in [dq, dk, dv]]
+diff --git a/transformer_engine/pytorch/csrc/extensions.h b/transformer_engine/pytorch/csrc/extensions.h
+index d31d965c..b645053a 100644
+--- a/transformer_engine/pytorch/csrc/extensions.h
++++ b/transformer_engine/pytorch/csrc/extensions.h
+@@ -928,4 +928,8 @@ class CommOverlapP2P : torch::CustomClassHolder, public transformer_engine::Comm
+ 
+ };  // CommOverlapP2P
+ 
++namespace transformer_engine::pytorch {
++void ub_deepgemm_install(const std::string &library_root);
++}  // namespace transformer_engine::pytorch
++
+ #endif  // TRANSFORMER_ENGINE_PYTORCH_CSRC_EXTENSIONS_H_
+diff --git a/transformer_engine/pytorch/csrc/extensions/comm_gemm_overlap.cpp b/transformer_engine/pytorch/csrc/extensions/comm_gemm_overlap.cpp
+index 33237f07..aab05ea9 100644
+--- a/transformer_engine/pytorch/csrc/extensions/comm_gemm_overlap.cpp
++++ b/transformer_engine/pytorch/csrc/extensions/comm_gemm_overlap.cpp
+@@ -327,6 +327,9 @@ CommOverlap::CommOverlap(CommOverlapHelper *helper, int tp_rank, int tp_size,
+ void CommOverlap::copy_into_buffer(const at::Tensor &input, bool local_chunk) {
+   const auto &input_ = input.contiguous();
+ 
++  set_ubuf_tokens(local_chunk ? _tp_size * input_.numel() / _ubuf.size(1)
++                              : _tp_size * input_.numel() / _ubuf.size(1));
++
+   // Check element size
+   const size_t element_size = input.element_size();
+   NVTE_CHECK(_ubuf.element_size() == element_size,
+@@ -344,8 +347,10 @@ void CommOverlap::copy_into_buffer(const at::Tensor &input, bool local_chunk) {
+   if (local_chunk) {
+     NVTE_CHECK(input_size * _tp_size == ubuf_size,
+                "Tried to copy an invalid tensor into a local chunk of a Userbuffers buffer ",
+-               "(input_size=", input_size, ", tensor_parallel_size=", _tp_size,
+-               ", ubuf_size=", ubuf_size, ")");
++               "(input_size=", input_size, ", input shape=", input_.size(0), "x", input_.size(1),
++               ", tensor_parallel_size=", _tp_size,
++               ", ubuf_size=", ubuf_size, ", ubuf shape=", _ubuf.size(0), "x", _ubuf.size(1),
++               ")");
+     dst_ptr = (reinterpret_cast<char *>(dst_ptr) + (ubuf_size / _tp_size) * _tp_id * element_size);
+   } else {
+     NVTE_CHECK(input_size == ubuf_size,
+@@ -438,6 +443,13 @@ CommOverlapP2P::CommOverlapP2P(CommOverlapHelper *helper, int tp_rank, int tp_si
+ void CommOverlapP2P::copy_into_buffer(const at::Tensor &input, bool local_chunk) {
+   const auto &input_ = input.contiguous();
+ 
++  if (local_chunk) {
++    set_ubuf_tokens(_tp_size * input_.numel() / _ubuf.size(1));
++  } else {
++    set_ubuf_tokens(_tp_size * input_.numel() /
++                    (_ubufs.size() * _ubuf.size(1)));
++  }
++
+   // Check element size
+   const size_t element_size = input.element_size();
+   NVTE_CHECK(_ubuf.element_size() == element_size,
+@@ -454,7 +466,9 @@ void CommOverlapP2P::copy_into_buffer(const at::Tensor &input, bool local_chunk)
+   if (local_chunk) {
+     NVTE_CHECK(_ubufs[_tp_id].numel() == input_size,
+                "Tried to copy an invalid tensor into a local chunk of a Userbuffers buffer ",
+-               "(input_size=", input_size, ", local_ubuf_size=", _ubufs[_tp_id].numel(), ")");
++               "(input_size=", input_size, ", input shape=", input_.size(0), "x", input_.size(1),
++               ", local_ubuf_size=", _ubufs[_tp_id].numel(), ", local_ubuf shape=",
++               _ubufs[_tp_id].size(0), "x", _ubufs[_tp_id].size(1), ")");
+     dst_ptr = _ubufs[_tp_id].dptr();
+   } else {
+     NVTE_CHECK(_ubuf.numel() == input_size,
+diff --git a/transformer_engine/pytorch/csrc/extensions/pybind.cpp b/transformer_engine/pytorch/csrc/extensions/pybind.cpp
+index eff5b9aa..d2e30968 100644
+--- a/transformer_engine/pytorch/csrc/extensions/pybind.cpp
++++ b/transformer_engine/pytorch/csrc/extensions/pybind.cpp
+@@ -243,6 +243,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+         py::arg("return_dequantized") = false);
+   m.def("bgrad_quantize", transformer_engine::pytorch::bgrad_quantize,
+         "Compute bias gradient and quantize", py::arg("input"), py::arg("quantizer"));
++  m.def("_ub_deepgemm_install", &transformer_engine::pytorch::ub_deepgemm_install,
++        "Register the DeepGEMM chunk provider for the forward GEMMs of the Userbuffers overlap "
++        "loops",
++        pybind11::arg("library_root"));
+   m.def("generic_gemm", transformer_engine::pytorch::gemm, "Compute GEMM (matrix-matrix multiply)",
+         py::arg("A"), py::arg("transA"), py::arg("B"), py::arg("transB"), py::arg("D"),
+         py::arg("quantizer"), py::arg("output_dtype"), py::arg("bias"), py::arg("bias_type"),
+diff --git a/transformer_engine/pytorch/csrc/extensions/ub_deepgemm.cpp b/transformer_engine/pytorch/csrc/extensions/ub_deepgemm.cpp
+new file mode 100644
+index 00000000..9930bb6a
+--- /dev/null
++++ b/transformer_engine/pytorch/csrc/extensions/ub_deepgemm.cpp
+@@ -0,0 +1,155 @@
++/*************************************************************************
++ * Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++ *
++ * See LICENSE for license information.
++ ************************************************************************/
++
++//
++//
++
++#if __has_include("csrc/jit_kernels/impls/sm90_fp8_gemm_per_tensor.hpp")
++
++#include <c10/cuda/CUDAGuard.h>
++#include <c10/cuda/CUDAStream.h>
++#include <torch/python.h>
++
++#include <algorithm>
++#include <cstdint>
++#include <exception>
++#include <map>
++#include <optional>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "csrc/jit_kernels/impls/sm90_fp8_gemm_per_tensor.hpp"
++
++#include "common.h"
++#include "extensions.h"
++#include "transformer_engine/ub_deepgemm.h"
++
++namespace transformer_engine::pytorch {
++
++namespace {
++
++using DType = transformer_engine::DType;
++using TensorWrapper = transformer_engine::TensorWrapper;
++
++std::optional<std::string> kernel_config(size_t n, size_t k) {
++  static const std::map<std::pair<size_t, size_t>, std::string> configs = {
++      {{5120, 8192}, "auto"},   // QKV projection
++      {{8192, 4096}, "auto"},   // attention output projection
++      {{28672, 8192}, "auto"},  // FC1 (gated)
++      {{8192, 14336}, "auto"},  // FC2
++  };
++  const auto it = configs.find({n, k});
++  if (it != configs.end()) return it->second;
++  return std::nullopt;
++}
++
++std::vector<size_t> shape_of(const NVTEBasicTensor &t) {
++  return std::vector<size_t>(t.shape.data, t.shape.data + t.shape.ndim);
++}
++
++NVTEBasicTensor per_tensor_scale_inv(const TensorWrapper &t) {
++  const auto rowwise = t.get_rowwise_scale_inv();
++  return rowwise.data_ptr != nullptr ? rowwise : t.get_columnwise_scale_inv();
++}
++
++bool aligned_16(const void *ptr) { return reinterpret_cast<uintptr_t>(ptr) % 16 == 0; }
++
++bool forward_chunk_gemm(const TensorWrapper &A, bool transa, const TensorWrapper &B, bool transb,
++                        TensorWrapper &D, bool grad, int math_sms, cudaStream_t stream) {
++  if (grad || !transa || transb) return false;
++  if (A.scaling_mode() != NVTE_DELAYED_TENSOR_SCALING ||
++      B.scaling_mode() != NVTE_DELAYED_TENSOR_SCALING) {
++    return false;
++  }
++  if (A.dtype() != DType::kFloat8E4M3 || B.dtype() != DType::kFloat8E4M3 ||
++      D.dtype() != DType::kBFloat16) {
++    return false;
++  }
++  if (math_sms <= 1) return false;
++
++  const auto b_data = B.get_rowwise_data();
++  const auto a_data = A.get_rowwise_data();
++  const auto d_data = D.get_rowwise_data();
++  const auto b_scale = per_tensor_scale_inv(B);
++  const auto a_scale = per_tensor_scale_inv(A);
++  if (b_data.data_ptr == nullptr || a_data.data_ptr == nullptr || d_data.data_ptr == nullptr ||
++      b_scale.data_ptr == nullptr || a_scale.data_ptr == nullptr) {
++    return false;
++  }
++  const auto b_shape = shape_of(b_data);
++  const auto a_shape = shape_of(a_data);
++  const auto d_shape = shape_of(d_data);
++  if (b_shape.size() != 2 || a_shape.size() != 2 || d_shape.size() != 2) return false;
++  const size_t m = b_shape[0];
++  const size_t k = b_shape[1];
++  const size_t n = a_shape[0];
++  if (a_shape[1] != k || d_shape[0] != m || d_shape[1] != n) return false;
++  if (m == 0 || n % 128 != 0 || k % 128 != 0) return false;
++  if (!aligned_16(a_data.data_ptr) || !aligned_16(b_data.data_ptr) ||
++      !aligned_16(d_data.data_ptr)) {
++    return false;
++  }
++  const auto config = kernel_config(n, k);
++  if (!config.has_value()) return false;
++
++  const auto device_index = c10::cuda::current_device();
++  int device_sms = 0;
++  NVTE_CHECK_CUDA(
++      cudaDeviceGetAttribute(&device_sms, cudaDevAttrMultiProcessorCount, device_index));
++  const int sms = std::min(math_sms, device_sms);
++
++  const auto device = at::Device(at::kCUDA, device_index);
++  const auto i64 = [](size_t v) { return static_cast<int64_t>(v); };
++  const c10::cuda::CUDAStreamGuard stream_guard(
++      c10::cuda::getStreamFromExternal(stream, device_index));
++  const int saved_sms = deep_gemm::runtime->get_num_sms();
++  deep_gemm::runtime->set_num_sms(sms);
++  bool launched = true;
++  try {
++    const auto fp8_opts = at::dtype(GetATenDType(DType::kFloat8E4M3)).device(device);
++    const auto f32_opts = at::dtype(at::kFloat).device(device);
++    const auto act = at::from_blob(b_data.data_ptr, {i64(m), i64(k)}, fp8_opts);
++    const auto weight = at::from_blob(a_data.data_ptr, {i64(n), i64(k)}, fp8_opts);
++    const auto out = at::from_blob(d_data.data_ptr, {i64(m), i64(n)},
++                                   at::dtype(at::kBFloat16).device(device));
++    const auto act_scale = at::from_blob(b_scale.data_ptr, {1}, f32_opts);
++    const auto weight_scale = at::from_blob(a_scale.data_ptr, {1}, f32_opts);
++    deep_gemm::sm90_fp8_gemm_per_tensor(act, act_scale, weight, weight_scale, out,
++                                        torch::Tensor(), static_cast<int>(m), static_cast<int>(n),
++                                        static_cast<int>(k), cute::UMMA::Major::K,
++                                        cute::UMMA::Major::K, "nk", config);
++  } catch (...) {
++    launched = false;
++  }
++  deep_gemm::runtime->set_num_sms(saved_sms);
++  return launched;
++}
++
++}  // namespace
++
++void ub_deepgemm_install(const std::string &library_root) {
++  deep_gemm::init_jit(library_root);
++  set_ub_deepgemm_chunk_fn(&forward_chunk_gemm);
++}
++
++}  // namespace transformer_engine::pytorch
++
++#else  // DeepGEMM sources are not on the include path
++
++#include <cstdio>
++#include <string>
++
++namespace transformer_engine::pytorch {
++
++void ub_deepgemm_install(const std::string &library_root) {
++  fprintf(stderr,
++          "[ub_deepgemm] install ignored: DeepGEMM sources were not on the build include path\n");
++}
++
++}  // namespace transformer_engine::pytorch
++
++#endif
+diff --git a/transformer_engine/pytorch/module/layernorm_linear.py b/transformer_engine/pytorch/module/layernorm_linear.py
+index 79f376dc..9293fe04 100644
+--- a/transformer_engine/pytorch/module/layernorm_linear.py
++++ b/transformer_engine/pytorch/module/layernorm_linear.py
+@@ -652,8 +652,8 @@ class _LayerNormLinear(torch.autograd.Function):
+             ctx.zero_centered_gamma = zero_centered_gamma
+             ctx.ub_overlap_ag = ub_overlap_ag_dgrad
+             ctx.ub_overlap_rs_dgrad = ub_overlap_rs_dgrad
+-            ctx.ub_bulk_wgrad = ub_bulk_wgrad
+-            ctx.ub_bulk_dgrad = ub_bulk_dgrad
++            ctx.ub_bulk_wgrad = ub_bulk_wgrad and weight_requires_grad
++            ctx.ub_bulk_dgrad = ub_bulk_dgrad and weight_requires_grad
+             ctx.ub_name = ub_name
+             ctx.requires_dgrad = inp_requires_grad
+             ctx.normalization = normalization
+diff --git a/transformer_engine/pytorch/module/linear.py b/transformer_engine/pytorch/module/linear.py
+index 197f066c..9740d284 100644
+--- a/transformer_engine/pytorch/module/linear.py
++++ b/transformer_engine/pytorch/module/linear.py
+@@ -1062,8 +1062,8 @@ def _linear_setup_ctx(
+     bwd_args.ub_name = fwd_args.ub_name
+     bwd_args.ub_overlap_ag = fwd_args.ub_overlap_ag_dgrad
+     bwd_args.ub_overlap_rs_dgrad = fwd_args.ub_overlap_rs_dgrad
+-    bwd_args.ub_bulk_dgrad = fwd_args.ub_bulk_dgrad
+-    bwd_args.ub_bulk_wgrad = fwd_args.ub_bulk_wgrad
++    bwd_args.ub_bulk_dgrad = fwd_args.ub_bulk_dgrad and fwd_args.weight_requires_grad
++    bwd_args.ub_bulk_wgrad = fwd_args.ub_bulk_wgrad and fwd_args.weight_requires_grad
+ 
+     # FSDP
+     bwd_args.fsdp_group = fwd_args.fsdp_group
+diff --git a/transformer_engine/pytorch/ops/basic/basic_linear.py b/transformer_engine/pytorch/ops/basic/basic_linear.py
+index cb429055..8e91b023 100644
+--- a/transformer_engine/pytorch/ops/basic/basic_linear.py
++++ b/transformer_engine/pytorch/ops/basic/basic_linear.py
+@@ -269,26 +269,51 @@ class BasicLinear(BasicOperation):
+             local_out_features,
+         )
+ 
++    def ub_fp8_reduce_scatter(self, mode: str) -> bool:
++        """Whether this op owns a quantizer for an FP8 Userbuffers reduce-scatter.
++
++        mode "forward": the row-parallel GEMM output. mode "backward": the
++        column-parallel dgrad. Set by the Userbuffers fused operations (which
++        know the parallel mode and the buffer) through set_ub_fp8_reduce_scatter;
++        the quantizer is the last slot of the mode, so its amax and scale take
++        part in the regular FP8 updates.
++        """
++        return mode in self.__dict__.get("_ub_fp8_rs_modes", ())
++
++    def set_ub_fp8_reduce_scatter(self, mode: str) -> None:
++        """Own a quantizer for an FP8 Userbuffers reduce-scatter (see ub_fp8_reduce_scatter)."""
++        if self.ub_fp8_reduce_scatter(mode):
++            return
++        self.__dict__["_ub_fp8_rs_modes"] = self.__dict__.get("_ub_fp8_rs_modes", ()) + (mode,)
++        if self._fp8_metas is not None and self._fp8_metas.get(mode) is not None:
++            self.reset_recipe_state(recipe=self._fp8_metas[mode]["recipe"])
++
+     def num_quantizers(self, mode: str) -> int:
+         if mode == "forward":
+-            return 2
++            return 3 if self.ub_fp8_reduce_scatter("forward") else 2
+         if mode == "backward":
+-            return 1
++            return 2 if self.ub_fp8_reduce_scatter("backward") else 1
+         return 0
+ 
+     def get_quantizer_roles(self, mode: str) -> Optional[list[QuantizerRole]]:
+         name = getattr(self, "name", "") or ""
+         if mode == "forward":
+             # BasicLinear owns input and weight quantizers.
+-            # Output quantizer is provided by the next op (as its input quantizer).
+-            return [
++            roles = [
+                 QuantizerRole(module_type="linear", tensor_type="input", name=name),
+                 QuantizerRole(module_type="linear", tensor_type="weight", name=name),
+             ]
++            if self.ub_fp8_reduce_scatter("forward"):
++                roles.append(QuantizerRole(module_type="linear", tensor_type="output", name=name))
++            return roles
+         if mode == "backward":
+             # BasicLinear owns grad_output quantizer.
+-            # Grad_input quantizer is provided by the previous op (as its grad_output quantizer).
+-            return [QuantizerRole(module_type="linear", tensor_type="grad_output", name=name)]
++            roles = [QuantizerRole(module_type="linear", tensor_type="grad_output", name=name)]
++            if self.ub_fp8_reduce_scatter("backward"):
++                roles.append(
++                    QuantizerRole(module_type="linear", tensor_type="grad_input", name=name)
++                )
++            return roles
+         return None
+ 
+     def reset_parameters(self) -> None:
+diff --git a/transformer_engine/pytorch/ops/fused/userbuffers_backward_linear.py b/transformer_engine/pytorch/ops/fused/userbuffers_backward_linear.py
+index c1070e38..0ee2c253 100644
+--- a/transformer_engine/pytorch/ops/fused/userbuffers_backward_linear.py
++++ b/transformer_engine/pytorch/ops/fused/userbuffers_backward_linear.py
+@@ -85,6 +85,16 @@ class UserbuffersBackwardLinear(FusedOperation):
+             self.tensor_parallel_size = reduce_scatter.process_group_size
+             self.sequence_parallel = True
+ 
++        if self.tensor_parallel_mode == "column" and linear._userbuffers_options is not None:
++            for suffix in ("_dgrad", "_wgrad"):
++                try:
++                    ub_comm = get_ub(linear._userbuffers_options["comm_name"] + suffix, True)
++                except (KeyError, RuntimeError):
++                    continue
++                if ub_comm.is_fp8_ubuf():
++                    linear.set_ub_fp8_reduce_scatter("backward")
++                    break
++
+     @staticmethod
+     def _functional_backward(
+         grad_output: torch.Tensor,
+@@ -223,8 +233,6 @@ class UserbuffersBackwardLinear(FusedOperation):
+                 raise ValueError("Missing quantizer for weight tensor")
+             if grad_output_quantizer is None:
+                 raise ValueError("Missing quantizer for grad output tensor")
+-            if grad_input_quantizer is not None:
+-                raise ValueError("Quantized grad input is not supported")
+         else:
+             input_quantizer = None
+             weight_quantizer = None
+@@ -261,7 +269,7 @@ class UserbuffersBackwardLinear(FusedOperation):
+                 ub_comm_wgrad = get_ub(ub_comm_name + "_wgrad", with_quantized_compute)
+                 ub_type_wgrad = CommOverlapType.RS
+                 with_wgrad_reduce_scatter_dx = True
+-                if ub_comm_wgrad.is_fp8_ubuf():
++                if ub_comm_wgrad.is_fp8_ubuf() and grad_input_quantizer is None:
+                     raise RuntimeError(
+                         "Userbuffers reduce-scatter is not supported with FP8 buffers"
+                     )
+@@ -271,7 +279,7 @@ class UserbuffersBackwardLinear(FusedOperation):
+                 with_dgrad_reduce_scatter_dx = True
+                 # cuBLASMp manages its own buffers, so the FP8 buffer
+                 # restriction does not apply.
+-                if not is_cublasmp and ub_comm_dgrad.is_fp8_ubuf():
++                if not is_cublasmp and ub_comm_dgrad.is_fp8_ubuf() and grad_input_quantizer is None:
+                     raise RuntimeError(
+                         "Userbuffers reduce-scatter is not supported with FP8 buffers"
+                     )
+@@ -419,6 +427,8 @@ class UserbuffersBackwardLinear(FusedOperation):
+                 )
+ 
+             # Perform dgrad GEMM
++            if grad_input_quantizer is not None:
++                grad_input_quantizer.set_usage(rowwise=True, columnwise=False)
+             dx, *_ = general_gemm(
+                 w,
+                 dy,
+@@ -560,6 +570,20 @@ class UserbuffersBackwardLinear(FusedOperation):
+ 
+         return dx_local, dw, extra_outputs
+ 
++    def _get_fp8_rs_grad_input_quantizer(
++        self,
++        linear_op: BasicLinear,
++        with_quantized_compute: bool,
++    ) -> Optional[Quantizer]:
++        """dgrad-output quantizer for a reduce-scatter through an FP8 userbuffer.
++
++        Owned by the linear op (its last backward slot, see
++        BasicLinear.ub_fp8_reduce_scatter).
++        """
++        if not with_quantized_compute or not linear_op.ub_fp8_reduce_scatter("backward"):
++            return None
++        return linear_op.get_quantizer("backward", linear_op.num_quantizers("backward") - 1)
++
+     def fuser_backward(
+         self,
+         basic_op_ctxs: list[OperationContext],
+@@ -614,7 +638,9 @@ class UserbuffersBackwardLinear(FusedOperation):
+             input_quantizer=linear_op_ctx.input_quantizer,
+             weight_quantizer=linear_op_ctx.weight_quantizer,
+             grad_output_quantizer=linear_op_ctx.grad_output_quantizer,
+-            grad_input_quantizer=None,  # Not supported
++            grad_input_quantizer=self._get_fp8_rs_grad_input_quantizer(
++                linear_op, linear_op_ctx.with_quantized_compute
++            ),
+             ub_comm_name=linear_op._userbuffers_options["comm_name"],
+         )
+         grad_input, grad_weight, extra_outputs = retval
+diff --git a/transformer_engine/pytorch/ops/fused/userbuffers_forward_linear.py b/transformer_engine/pytorch/ops/fused/userbuffers_forward_linear.py
+index cb5f8a16..e05bda2a 100644
+--- a/transformer_engine/pytorch/ops/fused/userbuffers_forward_linear.py
++++ b/transformer_engine/pytorch/ops/fused/userbuffers_forward_linear.py
+@@ -81,6 +81,14 @@ class UserbuffersForwardLinear(FusedOperation):
+             self.tensor_parallel_size = reduce_scatter.process_group_size
+             self.sequence_parallel = True
+ 
++        if self.tensor_parallel_mode == "row" and linear._userbuffers_options is not None:
++            try:
++                ub_comm = get_ub(linear._userbuffers_options["comm_name"] + "_fprop", True)
++            except (KeyError, RuntimeError):
++                ub_comm = None
++            if ub_comm is not None and ub_comm.is_fp8_ubuf():
++                linear.set_ub_fp8_reduce_scatter("forward")
++
+     @staticmethod
+     def _functional_forward(
+         input: torch.Tensor,  # pylint: disable=redefined-builtin
+@@ -181,7 +189,7 @@ class UserbuffersForwardLinear(FusedOperation):
+                 raise ValueError("Missing quantizer for input tensor")
+             if weight_quantizer is None:
+                 raise ValueError("Missing quantizer for weight tensor")
+-            if output_quantizer is not None:
++            if output_quantizer is not None and tensor_parallel_mode != "row":
+                 raise ValueError("Quantized output is not supported")
+         else:
+             input_quantizer = None
+@@ -239,6 +247,8 @@ class UserbuffersForwardLinear(FusedOperation):
+             reduce_scatter_output = torch.empty(y_local_size, dtype=dtype, device=device)
+ 
+         # Perform GEMM
++        if output_quantizer is not None:
++            output_quantizer.set_usage(rowwise=True, columnwise=False)
+         gemm_output, *_, reduce_scatter_output = general_gemm(
+             w,
+             x,
+@@ -277,6 +287,21 @@ class UserbuffersForwardLinear(FusedOperation):
+         extra_outputs = {"input": x_local, "weight": w}
+         return y_local, extra_outputs
+ 
++    def _get_fp8_rs_output_quantizer(
++        self,
++        linear_op: BasicLinear,
++        with_quantized_compute: bool,
++    ) -> Optional[Quantizer]:
++        """GEMM-output quantizer for a reduce-scatter through an FP8 userbuffer.
++
++        Owned by the linear op (its last forward slot, see
++        BasicLinear.ub_fp8_reduce_scatter); the C++ reduce dequantizes back to a
++        bf16 rs_output, so downstream ops are unaffected.
++        """
++        if not with_quantized_compute or not linear_op.ub_fp8_reduce_scatter("forward"):
++            return None
++        return linear_op.get_quantizer("forward", linear_op.num_quantizers("forward") - 1)
++
+     def fuser_forward(
+         self,
+         basic_op_ctxs: list[OperationContext],
+@@ -344,7 +369,9 @@ class UserbuffersForwardLinear(FusedOperation):
+             with_quantized_compute=with_quantized_compute,
+             input_quantizer=input_quantizer,
+             weight_quantizer=weight_quantizer,
+-            output_quantizer=None,  # Not supported
++            output_quantizer=self._get_fp8_rs_output_quantizer(
++                linear_op, with_quantized_compute
++            ),
+             input_requires_grad=input_requires_grad,
+             weight_requires_grad=weight_requires_grad,
+             ub_comm_name=linear_op._userbuffers_options["comm_name"],
+diff --git a/transformer_engine/pytorch/ops/op.py b/transformer_engine/pytorch/ops/op.py
+index d057d468..64b6af9f 100644
+--- a/transformer_engine/pytorch/ops/op.py
++++ b/transformer_engine/pytorch/ops/op.py
+@@ -337,6 +337,11 @@ class BasicOperation(FusibleOperation, metaclass=abc.ABCMeta):
+         need_to_reset_recipe_state = False
+         if self._fp8_metas is None or self._quantizers is None:
+             need_to_reset_recipe_state = True
++        elif any(
++            len(self._quantizers[mode]) != self.num_quantizers(mode)
++            for mode in ("forward", "backward")
++        ):
++            need_to_reset_recipe_state = True
+         else:
+             for mode in ("forward", "backward"):
+                 fp8_meta_key = FP8GlobalStateManager.get_meta_tensor_key(

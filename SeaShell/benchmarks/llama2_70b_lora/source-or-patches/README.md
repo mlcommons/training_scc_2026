@@ -1,15 +1,6 @@
-# (Team SeaShell) Running AMD LLama2-70B LoRA PyTorch MLPerf Benchmark (Primus)
-
+# Running AMD LLama2-70B LoRA PyTorch MLPerf Benchmark (Primus)
 
 This benchmark represents a LLama2-70B LoRA finetuning on the [GovReport](https://gov-report-data.github.io/) dataset.
-
-## Changes made from reference AMD submission 
-This implementation is based around AMDs official 6.0 submission here: https://github.com/mlcommons/training_results_v6.0/tree/main/AMD/benchmarks/llama2_70b_lora/implementations/MI350X_EPYC_9575F_primus with several patches added
-
-- Ported to Apptainer - The documentation below and the run scripts for reproduciability all assume the system is running Apptainer (formerly Singularity)  1.5.4 or newer. This provides lower overhead compared to docker and a more appropriate containarization medium for HPC. The base container is converted from AMDs docker container.
-- scc26-te_mi300x_no_fp8_weight_transpose_cache.patch -  Rebuild FP8 matrix transpose on the fly instead of fronting it, saves memory
-- scc26-primus_recipe_mi300x_fp8_swiglu_store.patch - Allow FP8 GEMM for Activation for the backward pass
-- scc26-megatron_lm_mi300x_fp8_direct_load.patch - Restore the ability to load FP8 weights directly (originally was removed when AMD ported to Primus). Saves 124 GiB of VRAM
 
 ## Prerequisites
 
@@ -21,7 +12,7 @@ This implementation is based around AMDs official 6.0 submission here: https://g
 ## Step 0: Setup the host
 This repo is structured around running with apptainer. Install apptainer 1.5.4 or newer.
 
-Edit run_with_apptainer.sh with the directory paths you wish to use, data must have > 270GB and the directory where the model is stored must have 40GB or more. LOCALCACHE is expected to be an node-local NVME cache, a fast (NVME + RDMA backed )parallel filesystem serves as a substituite when this is not available.
+Edit run_with_apptainer.sh with the directory paths you wish to use, data must have > 270GB and the directory where the model is stored must have 40GB or more.
 
 CODE is the path to this repository
 
@@ -34,19 +25,11 @@ MODEL_DIR=/home/$USER/ # feel free to change this to what you set in the run_wit
 pushd .
 cd $MODEL_DIR
 apptainer pull docker://rocm/amd-mlperf:llama2_70b_training_6.0 amd-mlperf_llama2_70b_training_6.0.sif
-popd
 ```
 Apply the patches to the image
 ```bash
-cp scc26.def $MODEL_DIR
-
-pushd .
-cd $MODEL_DIR
-
-apptainer build --fakeroot --force $MODEL_DIR/amd-mlperf_llama2_70b_training_6.0_scc26.sif scc26.def 
-
-rm scc26.def
-popd
+# assumes you are in this repository
+apptainer build --fakeroot --force $MODEL_DIR/amd-mlperf_llama2_70b_training_6.0_mi300x.sif mi300x.def # edit the .def file to point $MODEL_DIR
 ```
 
 ## Step 2: Prepare Dataset
@@ -61,11 +44,10 @@ The used model is the LLama2-70B with fused QKV. You will need 270GB to download
 
 To download the model from Huggingface, you'll need to sign the LLAMA 2 COMMUNITY LICENSE AGREEMENT as well as obtain a Hugginface Token `HF_TOKEN`.
 
-Start the docker container by mounting the volume you want to use for downloading the data under `/data` within the container
+Start the docker container by mounting the volume you want to use for downloading the data under `/data` within the container. In this example we use `/data/mlperf_llama2/data` as the host download directory:
 
 ```bash
-DATA=/mlperf/data
-apptainer run --rocm --bind $DATA:/data $MODEL_DIR/amd-mlperf_llama2_70b_training_6.0_scc26.sif
+apptainer run --rocm amd-mlperf_llama2_70b_training_6.0_mi300x.sif
 ```
 
 Start the script for downloading and preprocessing data from within the container (HF_TOKEN is needed to download the model weights):
@@ -126,7 +108,7 @@ If you want to perform a single run, use:
 
 ```bash
 export HF_TOKEN=<your-huggingace-token>
-# set nexp to 1 in config_MI300X
+export NEXP=1
 bash run_with_docker.sh
 ```
 

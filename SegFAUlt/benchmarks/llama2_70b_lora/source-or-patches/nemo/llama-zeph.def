@@ -1,0 +1,141 @@
+# Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+Bootstrap: docker
+From: {{ FROM_IMAGE_NAME }}
+
+%arguments
+    FROM_IMAGE_NAME=nvcr.io/nvidia/pytorch:26.04-py3
+    GIT_COMMIT_ID=
+    NCCL_REVISION=v2.30.4-1
+    MBRIDGE_REVISION=26.04-alpha.rc1
+    TE_REVISION=SKIP
+
+%files
+    # Build from zeph/nvidia-imp: relative sources use the build working directory.
+    . /workspace/ft-llm
+
+%post
+    set -e
+    GIT_COMMIT_ID='{{ GIT_COMMIT_ID }}'
+    export GIT_COMMIT_ID=$GIT_COMMIT_ID
+    (
+        git config --global user.name "a" && \
+            git config --global user.email "a"
+    )
+    export PIP_CONSTRAINT=""
+    mkdir -p /workspace/ft-llm
+    cd /workspace/ft-llm
+    (
+        NVARCH=$(uname -m |grep x86_64 2>/dev/null || echo sbsa) && \
+            curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/${NVARCH}/3bf863cc.pub > /etc/apt/trusted.gpg.d/cuda.asc && \
+            echo "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/${NVARCH} /" > /etc/apt/sources.list.d/cuda.list && \
+            apt-get update && apt-get install -y libcudnn9-cuda-13=9.21.1.3-1 libcudnn9-dev-cuda-13=9.21.1.3-1 libcudnn9-headers-cuda-13=9.21.1.3-1 && rm -rf /var/lib/apt/lists/*
+    )
+    export CUDNN_VERSION=9.21.1.3
+    NCCL_REVISION='{{ NCCL_REVISION }}'
+    cd /workspace/ft-llm
+    (
+        export DEBIAN_FRONTEND=noninteractive && \
+            apt-get update && \
+            apt-get install -y --no-install-recommends fakeroot devscripts debhelper && \
+            apt-get purge -y libnccl-dev libnccl2 && \
+            git clone https://github.com/NVIDIA/nccl.git && \
+            cd nccl && \
+            git checkout ${NCCL_REVISION} && \
+            echo "NCCL_REVISION=${NCCL_REVISION}" && \
+            make -j24 pkg.debian.build && \
+            dpkg -i build/pkg/deb/*.deb && \
+            cd .. && rm -rf nccl && \
+            apt-get purge -y fakeroot devscripts debhelper
+    )
+    export NCCL_VERSION=${NCCL_REVISION}
+    MBRIDGE_REVISION='{{ MBRIDGE_REVISION }}'
+    cd /workspace/ft-llm
+    (
+        pip uninstall -y megatron-core && \
+            git clone https://github.com/NVIDIA-NeMo/Megatron-Bridge.git /workspace/Megatron-Bridge && \
+            cd /workspace/Megatron-Bridge && \
+            git checkout ${MBRIDGE_REVISION} && \
+            git submodule update --init --recursive && \
+            echo MBRIDGE_COMMIT_HASH=$(git rev-parse HEAD) && \
+            echo $(git rev-parse HEAD) > /MBRIDGE_COMMIT_HASH.env && \
+            cd 3rdparty/Megatron-LM && \
+            echo MCORE_COMMIT_HASH=$(git rev-parse HEAD) && \
+            echo $(git rev-parse HEAD) > /MCORE_COMMIT_HASH.env && \
+            pip install -e .
+    )
+    export PYTHONPATH="/workspace/Megatron-Bridge/src:/workspace/Megatron-Bridge/3rdparty/Megatron-LM:${PYTHONPATH}"
+    TE_REVISION='{{ TE_REVISION }}'
+    cd /workspace/ft-llm
+    (
+        if [ "${TE_REVISION}" != SKIP ]; then \
+            pip uninstall -y transformer_engine && \
+            git clone https://github.com/NVIDIA/TransformerEngine.git /workspace/transformerengine && \
+            cd /workspace/transformerengine && \
+            git checkout ${TE_REVISION} && \
+            echo TE_COMMIT_HASH=$(git rev-parse HEAD) && \
+            echo $(git rev-parse HEAD) > /TE_COMMIT_HASH.env && \
+            pip install nvidia-mathdx==25.1.1 && \
+            git submodule init && git submodule update && \
+            NVTE_CUDA_ARCHS="100a;103a" NVTE_BUILD_ACTIVATION_WITH_FAST_MATH=1 NVTE_UB_WITH_MPI=1 NVTE_FRAMEWORK=pytorch NVTE_WITH_USERBUFFERS=1 MPI_HOME=/usr/local/mpi pip install --no-build-isolation . \
+            ; fi
+    )
+    cd /workspace/ft-llm
+    (
+        pip install -r requirements.txt
+    )
+    export PATH="/root/.local/bin:${PATH}"
+
+%environment
+    export GIT_COMMIT_ID='{{ GIT_COMMIT_ID }}'
+    export PIP_CONSTRAINT=""
+    export CUDNN_VERSION=9.21.1.3
+    export NCCL_VERSION='{{ NCCL_REVISION }}'
+    export PYTHONPATH="/workspace/Megatron-Bridge/src:/workspace/Megatron-Bridge/3rdparty/Megatron-LM:${PYTHONPATH}"
+    export PATH="/root/.local/bin:${PATH}"
+
+%runscript
+    cd /workspace/ft-llm || exit 1
+    if [ "$#" -eq 0 ]; then
+        set -- /bin/bash
+    fi
+    # Preserve the NVIDIA base image entrypoint when present.
+    if [ -x /opt/nvidia/nvidia_entrypoint.sh ]; then
+        exec /opt/nvidia/nvidia_entrypoint.sh "$@"
+    fi
+    exec "$@"
+
+%help
+    Build from the source directory (Apptainer 1.3+):
+      cd zeph/nvidia-imp
+      apptainer build --fakeroot /tmp/nvidia-imp.sif Apptainer.def
+
+    Override Docker ARG equivalents with --build-arg NAME=value, for example:
+      apptainer build --fakeroot --build-arg TE_REVISION=SKIP /tmp/nvidia-imp.sif Apptainer.def
+
+    Run with GPU support:
+      apptainer run --nv /tmp/nvidia-imp.sif python train.py
+    For exec, select the Docker WORKDIR explicitly:
+      apptainer exec --nv --pwd /workspace/ft-llm /tmp/nvidia-imp.sif bash
+
+    Place the output SIF outside the source directory to avoid copying it on rebuild.
+    Reference: https://apptainer.org/docs/user/main/definition_files.html
+

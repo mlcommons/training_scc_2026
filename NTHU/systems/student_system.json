@@ -1,0 +1,45 @@
+{
+  "submitter": "NTHU",
+  "division": "closed",
+  "status": "Research, Development, or Internal (RDI)",
+  "system_name": "student_system",
+
+  "number_of_nodes": "14",
+  "host_processors_per_node": "1",
+  "host_processor_model_name": "NVIDIA Grace (Arm Neoverse-V2)",
+  "host_processor_core_count": "72",
+  "host_processor_vcpu_count": "72",
+  "host_processor_frequency": "up to 3.39 GHz; limited to 2.0 GHz with the schedutil governor for the timed runs",
+  "host_processor_caches": "L1i 64 KiB/core, L1d 64 KiB/core, L2 1 MiB/core, L3 114 MiB shared",
+  "host_processor_interconnect": "single socket per node; NVLink-C2C 900 GB/s to the Hopper GPU",
+  "host_memory_capacity": "480 GB LPDDR5X (474 GiB usable)",
+  "host_memory_configuration": "on-package LPDDR5X, ~500 GB/s per node",
+  "host_storage_type": "shared NFS over InfiniBand, served from NVMe RAID on the head node",
+  "host_storage_capacity": "14 TB shared /nfs",
+  "host_networking": "1x NVIDIA ConnectX-7 (MT4129) InfiniBand NDR200, 200 Gb/s active per node",
+  "host_networking_topology": "all 14 nodes on one InfiniBand switch",
+
+  "accelerators_per_node": "1",
+  "accelerator_model_name": "NVIDIA GH200 480GB (Hopper H100, 96 GB HBM3)",
+  "accelerator_host_interconnect": "NVLink-C2C, 900 GB/s",
+  "accelerator_frequency": "up to 1980 MHz SM clock; Grace+Hopper module power capped at 580 W for these MLPerf runs (590 W for HPL, 600 W for HPL-MxP)",
+  "accelerator_on-chip_memories": "50 MB L2; 256 KB register file and 228 KB shared memory per SM",
+  "accelerator_memory_configuration": "HBM3",
+  "accelerator_memory_capacity": "96 GB HBM3 (97871 MiB)",
+  "accelerator_interconnect": "no GPU-to-GPU link between nodes; InfiniBand NDR200 200 Gb/s per node",
+  "accelerator_interconnect_topology": "one GPU per node, pure data parallelism; the only cross-node traffic per step is the LoRA adapter gradient all-reduce",
+
+  "cooling": "air-cooled; 7x 2U chassis with CMC-controlled fans, held at a fixed 30% duty during the timed runs",
+  "hw_notes": "Student cluster of 14 single-GPU GH200 nodes. The whole cluster, networking included, is held under the SCC26 10 kW budget: the Grace+Hopper module cap is set per node with the site nv_power tool -- 580 W for these MLPerf runs, 590 W for HPL and 600 W for HPL-MxP -- and the chassis fans to a fixed 30%. No hardware change or reboot between the certified HPL, HPL-MxP and MLPerf runs.",
+
+  "framework": "NVIDIA NeMo 2.4.0rc0 / Megatron-Core, PyTorch 2.7.0a0+nv25.04, Transformer Engine 2.2.0",
+  "other_software_stack": {
+    "cuda_version": "12.9",
+    "nccl": "2.26.3",
+    "nvidia_driver": "615.71.09",
+    "container": "nvcr.io/nvidia/pytorch:25.04-py3, run with Apptainer",
+    "mpi": "HPC-X OpenMPI (from the container)"
+  },
+  "operating_system": "Ubuntu 26.04.1 LTS, kernel 7.0.0-2016-nvidia-bos-64k",
+  "sw_notes": "NVIDIA's MLPerf v5.0 llama2_70b_lora implementation with TP=PP=CP=1 and pure data parallelism over 14 GPUs: GBS=14, micro-batch 1, evaluation every 392 samples (CEIL(384/14)*14), LoRA rank 16 on qkv_proj and o_proj, LR 5.5e-4 with a cosine decay whose length the logs record as opt_learning_rate_training_steps = 800. The frozen base weights are stored and computed in FP8 (FP8=True from NVIDIA's own config_common.sh), which is what makes 69 GB of weights fit in 96 GB. Saved activations are offloaded to Grace host memory over NVLink-C2C instead of being recomputed; see source-or-patches/cpu_offload_patch.py. Rank 0 alone writes the MLPerf log, and every run has its own output directory."
+}

@@ -1,0 +1,475 @@
+diff --git a/transformer_engine/common/comm_gemm_overlap/comm_gemm_overlap.cpp b/transformer_engine/common/comm_gemm_overlap/comm_gemm_overlap.cpp
+index f96de904..ae0c7384 100644
+--- a/transformer_engine/common/comm_gemm_overlap/comm_gemm_overlap.cpp
++++ b/transformer_engine/common/comm_gemm_overlap/comm_gemm_overlap.cpp
+@@ -13,8 +13,14 @@
+ #include <cassert>
+ #include <cuda_bf16.h>
+ 
++#include <algorithm>
+ #include <cstdlib>
++#include <cstring>
++#include <dlfcn.h>
+ #include <numeric>
++#include <stdexcept>
++#include <string>
++#include <vector>
+ 
+ #include "common/common.h"
+ #include "common/util/cuda_driver.h"
+@@ -24,6 +30,141 @@
+ #include "userbuffers/userbuffers.h"
+ 
+ #define HALF_BYTES 2
++
++namespace transformer_engine {
++
++// UB_TRANSPORT selects what carries the ring-exchange reduce-scatter: nccl (the stock ring, the default),
++// symk_nccl (a symmetric NCCL window) or tccl (our TMA reduce over the IPC-mapped peer ubuf). One selector,
++// so two transports can never be asked for at once.
++static const std::string &ub_transport() {
++  static const std::string transport = [] {
++    const char *env = std::getenv("UB_TRANSPORT");
++    const std::string v = env != nullptr ? env : "";
++    if (v.empty() || v == "nccl") return std::string("nccl");
++    if (v == "symk_nccl" || v == "tccl") return v;
++    throw std::runtime_error("UB_TRANSPORT must be nccl, symk_nccl or tccl, got: " + v);
++  }();
++  return transport;
++}
++
++static bool ub_symk_enabled() { return ub_transport() == "symk_nccl"; }
++
++void CommOverlapP2PBase::symk_setup(size_t chunk_capacity_bytes, DType buffer_dtype) {
++  const bool rank0 = _rank == 0;
++  if (typeToSize(buffer_dtype) != 2) {
++    if (rank0) printf("!!! [UB_TRANSPORT symk_nccl] buffer dtype is not 16-bit; this RS object keeps the ring\n");
++    return;
++  }
++  if (_ub_comm->nvsize != _tp_size || _ub_comm->nvrank != _tp_id) {
++    if (rank0)
++      printf("!!! [UB_TRANSPORT symk_nccl] UB intra domain (size %d) is not the TP domain (size %d); keeping the ring\n",
++             _ub_comm->nvsize, _tp_size);
++    return;
++  }
++  ncclUniqueId id;
++  memset(&id, 0, sizeof(id));
++  if (_tp_id == 0) {
++    if (ncclGetUniqueId(&id) != ncclSuccess) {
++      printf("!!! [UB_TRANSPORT symk_nccl] ncclGetUniqueId failed on TP rank 0; keeping the ring\n");
++    }
++  }
++  std::vector<ncclUniqueId> ids(_tp_size);
++  _ub_comm->_allgather(reinterpret_cast<void *>(ids.data()), _tp_size * sizeof(ncclUniqueId),
++                       reinterpret_cast<void *>(&id), sizeof(ncclUniqueId), _ub_comm->comm_intra);
++  id = ids[0];
++  ncclResult_t res = ncclCommInitRank(&_symk_comm, _tp_size, id, _tp_id);
++  if (res != ncclSuccess) {
++    if (rank0) printf("!!! [UB_TRANSPORT symk_nccl] ncclCommInitRank failed (%s); keeping the ring\n", ncclGetErrorString(res));
++    _symk_comm = nullptr;
++    return;
++  }
++  _symk_slot_capacity = chunk_capacity_bytes;
++  const size_t bytes = chunk_capacity_bytes * static_cast<size_t>(_tp_size + 1);
++  res = ncclMemAlloc(&_symk_buf, bytes);
++  if (res != ncclSuccess || _symk_buf == nullptr) {
++    if (rank0) printf("!!! [UB_TRANSPORT symk_nccl] ncclMemAlloc(%zu) failed (%s); keeping the ring\n", bytes, ncclGetErrorString(res));
++    _symk_buf = nullptr;
++    return;
++  }
++  res = ncclCommWindowRegister(_symk_comm, _symk_buf, bytes, &_symk_win, NCCL_WIN_COLL_SYMMETRIC);
++  if (res != ncclSuccess || _symk_win == nullptr) {
++    if (rank0)
++      printf("!!! [UB_TRANSPORT symk_nccl] ncclCommWindowRegister failed (%s); keeping the ring\n", ncclGetErrorString(res));
++    _symk_win = nullptr;
++    return;
++  }
++  _symk = true;
++  if (rank0)
++    printf("!!! [UB_TRANSPORT symk_nccl] ring-exchange RS object: symmetric window of %zu bytes (%d shard slots + 1 out) on a "
++           "TP-%d NCCL comm\n", bytes, _tp_size, _tp_size);
++}
++
++using ub_tma_rs_bf16_fn = int (*)(const void *, void *, unsigned long long, int, unsigned long long,
++                                  unsigned long long, int, void *, int);
++using ub_tma_rs_handshake_fn = int (*)(unsigned int *, const unsigned int *, void *, int);
++static ub_tma_rs_bf16_fn ub_tma_rs_bf16 = nullptr;
++static ub_tma_rs_handshake_fn ub_tma_rs_handshake = nullptr;
++
++static bool ub_tccl_enabled() { return ub_transport() == "tccl"; }
++
++// CTAs per TMA launch: a per-GPU budget of 12, split over the peers (4/peer at tp 4, 6 at tp 3, 12 at tp 2),
++// rounded up so every peer keeps at least two TMA issue queues. The budget is the tuned value; the split is
++// arithmetic, so there is nothing to set.
++static constexpr int kTcclCtasPerGpu = 12;
++
++static int ub_tccl_ctas(int npeers) { return std::max(1, (kTcclCtasPerGpu + npeers - 1) / npeers); }
++
++
++void CommOverlapP2PBase::tccl_setup(size_t chunk_capacity_bytes, DType buffer_dtype) {
++  const bool rank0 = _rank == 0;
++  if (_tp_size < 2 || buffer_dtype != DType::kBFloat16) {
++    if (rank0) printf("!!! [UB_TRANSPORT tccl] needs TP>=2 and a bf16 buffer (tp %d); keeping the ring\n", _tp_size);
++    return;
++  }
++  if (_ub_comm->nvsize != _tp_size || _ub_comm->nvrank != _tp_id) {
++    if (rank0) printf("!!! [UB_TRANSPORT tccl] UB intra domain (size %d) is not the TP domain; keeping the ring\n", _ub_comm->nvsize);
++    return;
++  }
++  if (ub_tma_rs_bf16 == nullptr) {
++    const char *lib = std::getenv("TMA_REDUCE_LIB");
++    void *h = lib != nullptr ? dlopen(lib, RTLD_NOW | RTLD_LOCAL) : nullptr;
++    if (h == nullptr) {
++      if (rank0) printf("!!! [UB_TRANSPORT tccl] cannot dlopen TMA_REDUCE_LIB=%s (%s); keeping the ring\n", lib ? lib : "(unset)",
++                        dlerror());
++      return;
++    }
++    ub_tma_rs_bf16 = reinterpret_cast<ub_tma_rs_bf16_fn>(dlsym(h, "tma_rs_bf16"));
++    ub_tma_rs_handshake = reinterpret_cast<ub_tma_rs_handshake_fn>(dlsym(h, "tma_rs_handshake"));
++    if (ub_tma_rs_bf16 == nullptr || ub_tma_rs_handshake == nullptr) {
++      if (rank0) printf("!!! [UB_TRANSPORT tccl] %s lacks tma_rs_bf16 / tma_rs_handshake; keeping the ring\n", lib);
++      ub_tma_rs_bf16 = nullptr;
++      ub_tma_rs_handshake = nullptr;
++      return;
++    }
++  }
++  void *ctl = nullptr;
++  const int reg = register_user_buffer_collective(&ctl, 4096, _ub_comm, true);
++  _tccl_ctl.clear();
++  for (int p = 0; p < _tp_size; ++p) {
++    if (p == _tp_id) continue;
++    _tccl_ctl.emplace_back(reinterpret_cast<unsigned int *>(ctl) + (p - _tp_id - 1 + _tp_size) % _tp_size,
++                           reinterpret_cast<const unsigned int *>(_ub_comm->peer_ptr[reg][p]) +
++                               (_tp_id - p - 1 + _tp_size) % _tp_size);
++  }
++  _tccl_slot_capacity = chunk_capacity_bytes;
++  _tccl = true;
++  if (rank0)
++    printf("!!! [UB_TRANSPORT tccl] ring-exchange RS object: TMA reduce over the IPC-mapped peer ubuf, %d CTAs, control region "
++           "%d\n", ub_tccl_ctas(_tp_size - 1), reg);
++}
++
++void CommOverlapP2PBase::tccl_handshake(cudaStream_t stream, int which) {
++  for (const auto &c : _tccl_ctl)
++    NVTE_CHECK(ub_tma_rs_handshake(c.first, c.second, reinterpret_cast<void *>(stream), which) == 0,
++               "UB_TRANSPORT tccl handshake(", which ? "ready" : "done", ") failed");
++}
++
++}  // namespace transformer_engine
+ #define UB_MAX_SM 32
+ 
+ using namespace std::placeholders;
+@@ -58,14 +199,17 @@ bool ub_chunk_gemm(const TensorWrapper &A, bool transa, const TensorWrapper &B,
+                    TensorWrapper &D, bool grad, const TensorWrapper &bias,
+                    const TensorWrapper &pre_gelu_out, bool accumulate,
+                    const TensorWrapper &workspace, bool use_split_accumulator, int math_sms,
+-                   cudaStream_t stream, const TensorWrapper &addend = TensorWrapper()) {
++                   cudaStream_t stream, const TensorWrapper &addend = TensorWrapper(),
++                   const TensorWrapper &addend2 = TensorWrapper(), const void *addend2_flags = nullptr,
++                   int piece_rows = 0, int piece_cols = 0) {
+   static const bool provider_enabled = [] {
+     const char *env = std::getenv("DEEPGEMM");
+     return env != nullptr && env[0] == '1';
+   }();
+   if (provider_enabled && !accumulate && !use_split_accumulator && bias.dptr() == nullptr &&
+       pre_gelu_out.numel() == 0 && get_ub_deepgemm_chunk_fn() != nullptr) {
+-    if (get_ub_deepgemm_chunk_fn()(A, transa, B, transb, D, grad, math_sms, addend, stream)) {
++    if (get_ub_deepgemm_chunk_fn()(A, transa, B, transb, D, grad, math_sms, addend, stream, addend2,
++                                   addend2_flags, piece_rows, piece_cols)) {
+       return addend.numel() > 0;
+     }
+   }
+@@ -930,6 +1074,8 @@ void CommOverlapP2PBase::initialize(const std::vector<size_t> &buffer_shape, DTy
+   _ubuf_capacity_tokens = buffer_shape[0];
+   _ubuf_tokens = buffer_shape[0];
+   _ubuf_hidden = buffer_shape[1];
++  if (_is_reduce_scatter && !_atomic_gemm && ub_symk_enabled()) symk_setup(buffer_chunk_bytes, buffer_dtype);
++  if (_is_reduce_scatter && !_atomic_gemm && ub_tccl_enabled()) tccl_setup(buffer_chunk_bytes, buffer_dtype);
+   if (_atomic_gemm && !_is_reduce_scatter) {
+     _use_multiatomic_ag = getenv<bool>("NVTE_AG_P2P_MULTI_ATOMIC");
+     if (_use_multiatomic_ag) {
+@@ -1446,6 +1592,13 @@ void CommOverlapP2PBase::split_overlap_rs(const TensorWrapper &A, bool transa,
+                "the ubuf dtype (tokens = tp_size * chunk tokens)");
+   }
+ 
++  const bool tccl = _tccl && _ubuf.element_size() == 2 && rs_output.element_size() == 2 &&
++                    n_chunk * m * _ubuf.element_size() <= _tccl_slot_capacity;
++  const bool tccl_fold = tccl && _tp_size == 2;
++  const bool tccl_pull = tccl && !tccl_fold;
++  bool tccl_ready_done = false, tccl_fused = false;
++  if (tccl) tccl_handshake(stream_main, 0);
++
+   // Catch up the main stream
+   NVTE_CHECK_CUDA(cudaEventRecord(_start_compute, stream_main));
+   for (size_t i = 0; i < _stream_send.size(); i++) {
+@@ -1460,6 +1613,13 @@ void CommOverlapP2PBase::split_overlap_rs(const TensorWrapper &A, bool transa,
+   userbuffers_tiny_delay(_stream_send[0]);
+   NVTE_CHECK_CUDA(cudaEventRecord(_start_compute, _stream_send[0]));
+ 
++  const size_t symk_shard_bytes = n_chunk * m * _ubuf.element_size();
++  const bool symk = _symk && _ubuf.element_size() == 2 && rs_output.element_size() == 2 &&
++                    symk_shard_bytes <= _symk_slot_capacity;
++  auto symk_slot = [&](int shard) {
++    return reinterpret_cast<char *>(_symk_buf) + static_cast<size_t>(shard) * symk_shard_bytes;
++  };
++
+   // GEMM and send/recv chunks
+   for (int i = 0; i < _tp_size; i++) {
+     // GEMM chunk
+@@ -1467,7 +1627,12 @@ void CommOverlapP2PBase::split_overlap_rs(const TensorWrapper &A, bool transa,
+     int input_b_chunk_id = (_tp_id + i + 1) % _tp_size;
+ 
+     auto input_b_chunk = get_tensor_chunk(B, input_b_chunk_id * input_chunk_size, {n_chunk, k});
+-    auto output_chunk = get_buffer_chunk_by_id(D, i);
++    auto output_chunk =
++        (tccl_fold && input_b_chunk_id == _tp_id)
++            ? TensorWrapper(rs_output.dptr(), std::vector<size_t>{n_chunk, m}, _ubufs[0].dtype())
++        : symk ? TensorWrapper(reinterpret_cast<void *>(symk_slot(input_b_chunk_id)),
++                             std::vector<size_t>{n_chunk, m}, _ubufs[0].dtype())
++             : get_buffer_chunk_by_id(D, i);
+ 
+     auto workspace_chunk =
+         get_tensor_chunk(workspace, stream_id * workspace_size_chunk, {workspace_size_chunk});
+@@ -1484,19 +1649,44 @@ void CommOverlapP2PBase::split_overlap_rs(const TensorWrapper &A, bool transa,
+       delta_chunk = get_tensor_chunk(pre_rs_add, static_cast<size_t>(input_b_chunk_id) * n_chunk * m,
+                                      {n_chunk, m});
+     }
+-    const bool delta_folded =
+-        ub_chunk_gemm(A, transa, input_b_chunk, transb, output_chunk, grad, bias, pre_gelu_out,
+-                      accumulate, workspace_chunk, use_split_accumulator, _math_sms,
+-                      _stream_compute[stream_id], delta_chunk);
++    bool delta_folded;
++    if (tccl_fold && input_b_chunk_id == _tp_id) {
++      const bool has_delta = pre_rs_add.numel() > 0;
++      cudaStream_t cs = _stream_compute[stream_id];
++      NVTE_CHECK_CUDA(cudaEventRecord(_start_comm, _stream_compute[(i + _stream_compute.size() - 1) %
++                                                                   _stream_compute.size()]));
++      NVTE_CHECK_CUDA(cudaStreamWaitEvent(cs, _start_comm, 0));
++      tccl_handshake(cs, 1);
++      tccl_ready_done = true;
++      TensorWrapper peer_part(
++          const_cast<char *>(reinterpret_cast<const char *>(_ub_comm->peer_ptr[_ub_reg][(_tp_id + 1) % _tp_size])),
++          std::vector<size_t>{n_chunk, m}, _ubufs[0].dtype());
++      TensorWrapper none;
++      const TensorWrapper &add1 = has_delta ? delta_chunk : peer_part;
++      const TensorWrapper &add2 = has_delta ? peer_part : none;
++      tccl_fused = ub_chunk_gemm(A, transa, input_b_chunk, transb, output_chunk, grad, bias, pre_gelu_out,
++                                 accumulate, workspace_chunk, use_split_accumulator, _math_sms, cs, add1, add2);
++      delta_folded = tccl_fused;
++    } else {
++      delta_folded =
++          ub_chunk_gemm(A, transa, input_b_chunk, transb, output_chunk, grad, bias, pre_gelu_out,
++                        accumulate, workspace_chunk, use_split_accumulator, _math_sms,
++                        _stream_compute[stream_id], delta_chunk);
++    }
+     if (pre_rs_add.numel() > 0 && !delta_folded) {
+-      launch_pre_rs_add_p2p(reinterpret_cast<char *>(_ubufs[i].dptr()),
++      launch_pre_rs_add_p2p((tccl_fold && input_b_chunk_id == _tp_id) ? reinterpret_cast<char *>(rs_output.dptr())
++                            : symk ? symk_slot(input_b_chunk_id) : reinterpret_cast<char *>(_ubufs[i].dptr()),
+                             reinterpret_cast<const char *>(pre_rs_add.dptr()),
+                             static_cast<size_t>(input_b_chunk_id) * n_chunk, m,
+                             static_cast<size_t>(_tp_size) * n_chunk, n_chunk,
+                             _stream_compute[stream_id]);
+     }
++    if (tccl_pull && input_b_chunk_id != _tp_id) {
++      userbuffers_send(_ub_reg, 0, _ub_reg, 0, 0, _ub_comm, input_b_chunk_id + _rank_round_tp,
++                       _stream_compute[stream_id]);
++    }
+ 
+-    if (i > 0) {
++    if (i > 0 && !symk && !tccl) {
+       // P2P communication chunk
+       int prev_stream_id = (i - 1) % _stream_compute.size();
+       int send_offset = comm_bytes * (i - 1);
+@@ -1513,6 +1703,26 @@ void CommOverlapP2PBase::split_overlap_rs(const TensorWrapper &A, bool transa,
+     }
+   }
+ 
++  if (tccl_pull) {
++    // Peer (r-j) signals after writing my shard to its slot j-1; pull each in arrival order, own partial last.
++    const unsigned long long row_bytes = static_cast<unsigned long long>(m) * _ubuf.element_size();
++    void *const rs = reinterpret_cast<void *>(_stream_recv);
++    for (int j = 1; j < _tp_size; ++j) {
++      const int peer = (_tp_id - j + _tp_size) % _tp_size;
++      userbuffers_recv(_ub_reg, 0, _ub_reg, 0, 0, _ub_comm, peer + _rank_round_tp, _stream_recv);
++      const char *src = reinterpret_cast<const char *>(_ub_comm->peer_ptr[_ub_reg][peer]) +
++                        static_cast<size_t>(j - 1) * comm_bytes;
++      const int rc = ub_tma_rs_bf16(src, rs_output.dptr(), row_bytes, static_cast<int>(n_chunk), row_bytes, row_bytes,
++                                    ub_tccl_ctas(_tp_size - 1), rs, j == 1 ? 0 : 1);
++      NVTE_CHECK(rc == 0, "UB_TRANSPORT tccl tma_rs_bf16 (pull from TP rank ", peer, ") failed: ", rc);
++    }
++    NVTE_CHECK_CUDA(cudaEventRecord(_start_comm, _stream_compute[(_tp_size - 1) % _stream_compute.size()]));
++    NVTE_CHECK_CUDA(cudaStreamWaitEvent(_stream_recv, _start_comm, 0));
++    const int rc = ub_tma_rs_bf16(_ubufs[_tp_size - 1].dptr(), rs_output.dptr(), row_bytes, static_cast<int>(n_chunk),
++                                  row_bytes, row_bytes, ub_tccl_ctas(_tp_size - 1), rs, 1);
++    NVTE_CHECK(rc == 0, "UB_TRANSPORT tccl tma_rs_bf16 (own partial) failed: ", rc);
++  }
++
+   for (size_t i = 0; i < _stream_compute.size(); i++) {
+     NVTE_CHECK_CUDA(cudaEventRecord(_stop_compute, _stream_compute[i]));
+     NVTE_CHECK_CUDA(cudaStreamWaitEvent(stream_main, _stop_compute, 0));
+@@ -1524,6 +1734,40 @@ void CommOverlapP2PBase::split_overlap_rs(const TensorWrapper &A, bool transa,
+   NVTE_CHECK_CUDA(cudaEventRecord(_stop_recv, _stream_recv));
+   NVTE_CHECK_CUDA(cudaStreamWaitEvent(stream_main, _stop_recv, 0));
+ 
++  if (tccl_pull) {
++    _ub_comm->sms = ori_sms;
++    return;
++  }
++
++  if (tccl_fold) {
++    void *const sp = reinterpret_cast<void *>(stream_main);
++    if (!tccl_ready_done) tccl_handshake(stream_main, 1);
++    const int peer = (_tp_id + 1) % _tp_size;
++    const char *peer_slot0 = reinterpret_cast<const char *>(_ub_comm->peer_ptr[_ub_reg][peer]);
++    if (tccl_fused) {
++      _ub_comm->sms = ori_sms;
++      return;
++    }
++    const unsigned long long row_bytes = static_cast<unsigned long long>(m) * _ubuf.element_size();
++    const int rc = ub_tma_rs_bf16(peer_slot0, rs_output.dptr(), row_bytes, static_cast<int>(n_chunk), row_bytes, row_bytes,
++                                  ub_tccl_ctas(_tp_size - 1), sp, 1);
++    NVTE_CHECK(rc == 0, "UB_TRANSPORT tccl tma_rs_bf16 failed: ", rc);
++    _ub_comm->sms = ori_sms;
++    return;
++  }
++
++  if (symk) {
++    char *out_slot = reinterpret_cast<char *>(_symk_buf) + static_cast<size_t>(_tp_size) * _symk_slot_capacity;
++    const ncclDataType_t nccl_dtype = _ubuf.dtype() == DType::kBFloat16 ? ncclBfloat16 : ncclFloat16;
++    const ncclResult_t res = ncclReduceScatter(_symk_buf, out_slot, n_chunk * m, nccl_dtype, ncclSum, _symk_comm,
++                                               stream_main);
++    NVTE_CHECK(res == ncclSuccess, "UB_TRANSPORT symk_nccl ncclReduceScatter failed: ", ncclGetErrorString(res));
++    NVTE_CHECK_CUDA(cudaMemcpyAsync(rs_output.dptr(), out_slot, symk_shard_bytes, cudaMemcpyDeviceToDevice,
++                                    stream_main));
++    _ub_comm->sms = ori_sms;
++    return;
++  }
++
+   // Reduce GEMM output chunks
+   char *reduce_buf_ptr = reinterpret_cast<char *>(_ubufs[_tp_size - 1].dptr());
+   char *rs_output_ptr = reinterpret_cast<char *>(rs_output.dptr());
+diff --git a/transformer_engine/common/include/transformer_engine/comm_gemm_overlap.h b/transformer_engine/common/include/transformer_engine/comm_gemm_overlap.h
+index ed086680..0f4c29da 100644
+--- a/transformer_engine/common/include/transformer_engine/comm_gemm_overlap.h
++++ b/transformer_engine/common/include/transformer_engine/comm_gemm_overlap.h
+@@ -287,6 +287,17 @@ class CommOverlapP2PBase : public CommOverlapCore {
+   std::vector<cudaStream_t> _stream_send;
+   cudaStream_t _stream_recv;
+   cudaEvent_t _stop_send, _stop_recv;
++  bool _symk{false};
++  ncclComm_t _symk_comm{nullptr};
++  void *_symk_buf{nullptr};
++  ncclWindow_t _symk_win{nullptr};
++  size_t _symk_slot_capacity{0};  // bytes of one shard at buffer capacity
++  void symk_setup(size_t chunk_capacity_bytes, DType buffer_dtype);
++  bool _tccl{false};
++  std::vector<std::pair<unsigned int *, const unsigned int *>> _tccl_ctl;
++  size_t _tccl_slot_capacity{0};
++  void tccl_setup(size_t chunk_capacity_bytes, DType buffer_dtype);
++  void tccl_handshake(cudaStream_t stream, int which);
+ 
+  private:
+   void initialize(const std::vector<size_t> &buffer_shape, DType buffer_dtype,
+diff --git a/transformer_engine/common/include/transformer_engine/ub_deepgemm.h b/transformer_engine/common/include/transformer_engine/ub_deepgemm.h
+--- a/transformer_engine/common/include/transformer_engine/ub_deepgemm.h
++++ b/transformer_engine/common/include/transformer_engine/ub_deepgemm.h
+@@ -15,7 +15,9 @@ namespace transformer_engine {
+ //
+ using UbDeepGemmChunkFn = bool (*)(const TensorWrapper &A, bool transa, const TensorWrapper &B,
+                                    bool transb, TensorWrapper &D, bool grad, int math_sms,
+-                                   const TensorWrapper &addend, cudaStream_t stream);
++                                   const TensorWrapper &addend, cudaStream_t stream,
++                                   const TensorWrapper &addend2, const void *addend2_flags,
++                                   int piece_rows, int piece_cols);
+ 
+ void set_ub_deepgemm_chunk_fn(UbDeepGemmChunkFn fn);
+ UbDeepGemmChunkFn get_ub_deepgemm_chunk_fn();
+diff --git a/transformer_engine/pytorch/csrc/extensions/ub_deepgemm.cpp b/transformer_engine/pytorch/csrc/extensions/ub_deepgemm.cpp
+index 5ce28122..ff954d45 100644
+--- a/transformer_engine/pytorch/csrc/extensions/ub_deepgemm.cpp
++++ b/transformer_engine/pytorch/csrc/extensions/ub_deepgemm.cpp
+@@ -39,7 +39,7 @@ std::optional<std::string> kernel_config(size_t n, size_t k) {
+   static const std::map<std::pair<size_t, size_t>, std::string> configs = {
+       {{5120, 8192}, "auto"},   // QKV projection
+       {{8192, 4096}, "auto"},   // attention output projection
+-      {{28672, 8192}, "auto"},  // FC1 (gated)
++      {{28672, 8192}, "128,256,1,1,4,2"},
+       {{8192, 14336}, "auto"},  // FC2
+   };
+   const auto it = configs.find({n, k});
+@@ -60,7 +60,8 @@ bool aligned_16(const void *ptr) { return reinterpret_cast<uintptr_t>(ptr) % 16
+ 
+ bool forward_chunk_gemm(const TensorWrapper &A, bool transa, const TensorWrapper &B, bool transb,
+                         TensorWrapper &D, bool grad, int math_sms, const TensorWrapper &addend,
+-                        cudaStream_t stream) {
++                        cudaStream_t stream, const TensorWrapper &addend2, const void *addend2_flags,
++                        int piece_rows, int piece_cols) {
+   if (grad || !transa || transb) return false;
+   if (A.scaling_mode() != NVTE_DELAYED_TENSOR_SCALING ||
+       B.scaling_mode() != NVTE_DELAYED_TENSOR_SCALING) {
+@@ -70,6 +71,7 @@ bool forward_chunk_gemm(const TensorWrapper &A, bool transa, const TensorWrapper
+       D.dtype() != DType::kBFloat16) {
+     return false;
+   }
++  if (addend2.numel() > 0 && addend.numel() == 0) return false;
+   if (math_sms <= 1) return false;
+ 
+   const auto b_data = B.get_rowwise_data();
+@@ -94,19 +96,30 @@ bool forward_chunk_gemm(const TensorWrapper &A, bool transa, const TensorWrapper
+       !aligned_16(d_data.data_ptr)) {
+     return false;
+   }
+-  const auto config = kernel_config(n, k);
++  auto config = kernel_config(n, k);
+   if (!config.has_value()) return false;
+   const bool with_addend = addend.numel() > 0;
+   NVTEBasicTensor c_data{};
+   if (with_addend) {
+     c_data = addend.get_rowwise_data();
+     const auto c_shape = shape_of(c_data);
+-    if (grad || m >= 6144 || addend.dtype() != DType::kBFloat16 || c_shape.size() != 2 ||
++    if (m >= 6144 || addend.dtype() != DType::kBFloat16 || c_shape.size() != 2 ||
+         c_shape[0] != m || c_shape[1] != n || !aligned_16(c_data.data_ptr) ||
+         m % 128 != 0 || n % 256 != 0) {
+       return false;
+     }
+   }
++  if (with_addend) config = std::string("auto");
++  const bool with_addend2 = addend2.numel() > 0;
++  NVTEBasicTensor c2_data{};
++  if (with_addend2) {
++    c2_data = addend2.get_rowwise_data();
++    const auto c2_shape = shape_of(c2_data);
++    if (addend2.dtype() != DType::kBFloat16 || c2_shape.size() != 2 || c2_shape[0] != m || c2_shape[1] != n ||
++        !aligned_16(c2_data.data_ptr)) {
++      return false;
++    }
++  }
+ 
+   const auto device_index = c10::cuda::current_device();
+   int device_sms = 0;
+@@ -133,10 +146,22 @@ bool forward_chunk_gemm(const TensorWrapper &A, bool transa, const TensorWrapper
+     const auto c = with_addend ? at::from_blob(c_data.data_ptr, {i64(m), i64(n)},
+                                                at::dtype(at::kBFloat16).device(device))
+                                : torch::Tensor();
++    const auto c2 = with_addend2 ? at::from_blob(c2_data.data_ptr, {i64(m), i64(n)},
++                                                 at::dtype(at::kBFloat16).device(device))
++                                 : torch::Tensor();
++    const bool with_flags =
++        (with_addend2 || with_addend) && addend2_flags != nullptr && piece_rows > 0 && piece_cols > 0;
++    const auto c2_flags = with_flags
++        ? at::from_blob(const_cast<void *>(addend2_flags),
++                        {i64((m + piece_rows - 1) / piece_rows) * i64((n + piece_cols - 1) / piece_cols)},
++                        at::dtype(at::kInt).device(device))
++        : torch::Tensor();
+     deep_gemm::sm90_fp8_gemm_per_tensor(act, act_scale, weight, weight_scale, out,
+                                         torch::Tensor(), static_cast<int>(m), static_cast<int>(n),
+                                         static_cast<int>(k), cute::UMMA::Major::K,
+-                                        cute::UMMA::Major::K, "nk", config, torch::Tensor(), c);
++                                        cute::UMMA::Major::K, "nk", config, torch::Tensor(), c, c2,
++                                        c2_flags, with_flags ? piece_rows : 0,
++                                        with_flags ? piece_cols : 0);
+   } catch (...) {
+     launched = false;
+   }

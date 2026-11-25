@@ -1,18 +1,17 @@
 #!/bin/bash
-# Batch script: Llama2-70B LoRA on one 8-GPU H200 NVL node.
-# Submit:  flux batch -N 1 -n 1 -g 8 --exclusive -t 90 run_lora70b_triton_fix.sh
+# Batch script: Llama2-70B LoRA on portal-lms (8xH200 NVL, one node).
+# Submit:  flux batch -N 1 -n 1 -g 8 --exclusive -t 90 run_lora70b_flux.sh
 # Monitor: flux jobs -a ; flux job attach <id> ; flux cancel <id>
 #
 # Knobs (env overrides; defaults = HPO start point):
-#   LR (4e-4), WARMUP_STEPS (11), GBS (8), MAX_STEPS (550), SEED (1)
+#   LR (6e-4), WARMUP_STEPS (0), GBS (8), MAX_STEPS (550), SEED (1)
 #   TP (4; use 8 if OOM), CONTAINER (26.04 SIF), CKPT_ROOT (converted ckpt)
 #
 # GPU request: -n 1 -g 8 = ONE task holding all 8 GPUs, then torchrun spawns
 # 8 workers. (Do NOT use -n 8 -g 8: that requests 64 GPUs.)
-# Site-specific paths are placeholders in this copy; the logic is unchanged.
 set -u
-WORK=${WORK:-/path/to/work}
-IMPL=${IMPL:-$WORK/nemo}   # NVIDIA llama2_70b_lora NeMo implementation
+WORK=${WORK:-/local/users/dkb/MLPerf}   # scored runs: gpu1 local NVMe
+IMPL=$WORK/train_grace/nemo
 CONTAINER=${CONTAINER:-$WORK/pytorch_26.04-py3.sif}
 NPROC=${NPROC:-8}
 
@@ -22,27 +21,29 @@ export MASTER_PORT=${MASTER_PORT:-29511}
 
 # ---- HPO knobs (Closed-division legal) ----
 export LR=${LR:-0.0004}
-export WARMUP_STEPS=${WARMUP_STEPS:-11}
+export WARMUP_STEPS=${WARMUP_STEPS:-0}
 export MAX_STEPS=${MAX_STEPS:-550}
 export GBS=${GBS:-8}                 # global batch target
 export SEED=${SEED:-1}
 # MLPerf submission identity; mlperf_common/logging.py reads these. The platform
 # is logged as "<num_nodes>x<MLPERF_SUBMISSION_PLATFORM>", so "1x" must not be here.
-export MLPERF_SUBMISSION_ORG="${MLPERF_SUBMISSION_ORG:-GigEmBytes}"
+export MLPERF_SUBMISSION_ORG="${MLPERF_SUBMISSION_ORG:-Texas A&M University}"
 export MLPERF_SUBMISSION_PLATFORM="${MLPERF_SUBMISSION_PLATFORM:-H200_NVL_8x}"
 export DGXNNODES=1 DGXNGPU=$NPROC
 # TP=1 is impossible on Hopper: 70B in bf16 is ~138GB, and H200 has 141GB
 # before activations. TP=4 leaves ~35GB/GPU. If it still OOMs, use TP=8.
 export GPU_ARCH=${GPU_ARCH:-h100}   # H200 is Hopper; picks conf/tp_overlap/h100*
 export TP_REQ=${TP:-4}
-export TP=$TP_REQ PP=1 CP=1 SP=0
+export SP_REQ=${SP_REQ:-0}           # 0 = validated default; 1 needed for TP overlap
+export TP=$TP_REQ PP=1 CP=1 SP=$SP_REQ
 export DP=$((NPROC / (TP*PP*CP)))
 if [ "$DP" -lt 1 ] || [ $((GBS % DP)) -ne 0 ]; then
   echo "FATAL: GBS=$GBS not divisible by DP=$DP (NPROC=$NPROC TP=$TP)" >&2
   exit 2
 fi
 export MINIBS=$((GBS / DP))          # YAML: GBS = MINIBS * DP (CP=1)
-export MBS=1 VAL_MBS=1 FP8=True FP4=False
+export MBS=${MBS:-1} VAL_MBS=${VAL_MBS:-1} FP8=True FP4=False
+REQ_VAL_MBS=$VAL_MBS   # config_common.sh hardcodes VAL_MBS=1; restore after source
 export NUM_WORKERS=${NUM_WORKERS:-4}
 
 # Recipe environment: FP8/TE flags + NCCL tuning (sets FP8_* etc.)
@@ -52,9 +53,9 @@ export DGXSYSTEM=H200_NVL_8x   # config_common.sh derives it from the script bas
 
 # CRITICAL: config_common.sh hardcodes TP=1/PP=1 (and LOAD_CKPT=True). Restore
 # the parallelism computed above; otherwise the 70B model OOMs on one GPU.
-export TP=$TP_REQ PP=1 CP=1 SP=0
+export TP=$TP_REQ PP=1 CP=1 SP=$SP_REQ
 export DGXNGPU=$NPROC DGXNNODES=1
-export MBS=1 VAL_MBS=1
+export MBS=1 VAL_MBS=$REQ_VAL_MBS
 export LOAD_CKPT=True
 # Scored runs leave SKIP_EVALS unset: the YAML reference schedule is
 # floor(0.125*GBS+2) = 3 for GBS=8, i.e. first eval at step 192. The 200-step
@@ -79,7 +80,7 @@ echo "CKPT=$CKPT_ROOT DATA=$DATA_ROOT"
 
 # ---- provenance (host-side audit trail for the submission package) ----
 # cache_clear is logged but page caches are NOT dropped: drop_caches is
-# root-only on the node (same as IPMI/RAPL above). The method is recorded
+# root-only on portal-lms (same as IPMI/RAPL above). The method is recorded
 # here, not in the MLPerf log, so the log line stays a plain event.
 {
   echo "date=$(date -Is)"
@@ -96,23 +97,33 @@ echo "CKPT=$CKPT_ROOT DATA=$DATA_ROOT"
   echo "env MLPERF_SUBMISSION_PLATFORM=$MLPERF_SUBMISSION_PLATFORM"
   echo "env DGXSYSTEM=$DGXSYSTEM DGXNNODES=$DGXNNODES DGXNGPU=$DGXNGPU"
   echo "env LR=$LR GBS=$GBS SEED=$SEED MAX_STEPS=$MAX_STEPS WARMUP_STEPS=$WARMUP_STEPS"
-  echo "env SKIP_EVALS=${SKIP_EVALS:-<unset>} TP=$TP DP=$DP MINIBS=$MINIBS"
+  echo "env SKIP_EVALS=${SKIP_EVALS:-<unset>} TP=$TP DP=$DP MINIBS=$MINIBS SP=$SP VAL_MBS=$VAL_MBS TP_COMM_OVERLAP=${TP_COMM_OVERLAP:-False} MCORE_CUDA_GRAPH=${MCORE_CUDA_GRAPH:-0}"
   echo "env POWER_INTERVAL=${POWER_INTERVAL:-} POWER_WARMUP=${POWER_WARMUP:-} POWER_FACTOR=${POWER_FACTOR:-}"
 } > "$LOGDIR/provenance.txt" 2>&1
 flux job info "${FLUX_JOB_ID:-}" jobspec > "$LOGDIR/jobspec.json" 2>/dev/null || true
 nvidia-smi -L > "$LOGDIR/gpus.txt" 2>&1 || true
 
-# ---- power logging (host-side; IPMI/RAPL are root-only on the node) ----
-# nvidia-smi is the only unprivileged source. The logger writes 1 Hz CSV and a
-# summary; POWER_FACTOR converts GPU-module watts to an estimated node wattage
-# and should be calibrated once against the PDU/BMC.
-POWER_PID=""
-POWER_CSV=$LOGDIR/power.csv
-if command -v nvidia-smi >/dev/null 2>&1; then
-  nvidia-smi -q -d POWER > "$LOGDIR/power_limits.txt" 2>&1 || true
-  python3 "$WORK/power_logger.py" --out "$POWER_CSV" --interval "${POWER_INTERVAL:-1}" &
-  POWER_PID=$!
+# AFFINITY_DIAG=1: record node topology and each train.py rank's inherited CPU
+# mask, to verify whether all torchrun workers share one core set.
+if [ "${AFFINITY_DIAG:-0}" = "1" ]; then
+  { hostname; lscpu; cat /sys/devices/system/node/node*/cpulist 2>/dev/null
+    nvidia-smi topo -m 2>/dev/null; } > "$LOGDIR/topology.txt" 2>&1
+  (
+    for _ in $(seq 1 90); do
+      pids=$(pgrep -f 'python.*train\.py' 2>/dev/null | head -20)
+      if [ -n "$pids" ]; then
+        for p in $pids; do
+          e=/proc/$p/environ
+          echo "pid=$p rank=$(tr '\0' '\n' <$e | sed -n 's/^RANK=//p') local_rank=$(tr '\0' '\n' <$e | sed -n 's/^LOCAL_RANK=//p') cvd=$(tr '\0' '\n' <$e | sed -n 's/^CUDA_VISIBLE_DEVICES=//p') $(sed -n 's/^Cpus_allowed_list:/cpus_allowed:/p' /proc/$p/status)"
+        done
+        break
+      fi
+      sleep 2
+    done
+  ) > "$LOGDIR/affinity_diag.txt" 2>&1 &
 fi
+
+
 
 # Export everything the container body needs. Keep the body in ONE single-quoted
 # string: the previous '"$VAR"' concatenation broke parsing and ran the body on
@@ -124,7 +135,7 @@ export IMPL WORK NPROC MASTER_ADDR MASTER_PORT
 # performance run set TRITON_LIBCUDA_PATH=<dir with libcuda.so.1> and
 # TORCH_COMPILE_DISABLE=0 to re-enable.
 export TORCH_COMPILE_DISABLE=${TORCH_COMPILE_DISABLE:-1}
-singularity exec --nv --bind "$WORK:$WORK" "$CONTAINER" bash -c '
+singularity exec --nv --bind /scratch:/scratch "$CONTAINER" bash -c '
   set -u
   cd "$IMPL"
   export PYTHONPATH="$WORK/pylibs_h200:$WORK/Megatron-Bridge/src:$WORK/Megatron-Bridge/3rdparty/Megatron-LM"
@@ -148,18 +159,10 @@ singularity exec --nv --bind "$WORK:$WORK" "$CONTAINER" bash -c '
   # cache_clear once, before init_start (run.sub:255-258 does the same via
   # callback_logging; mllog alone needs no torch/megatron, ~0.2 s).
   python -c "from mlperf_logging import mllog; mllog.get_mllogger().event(key=mllog.constants.CACHE_CLEAR, value=True)"
-  torchrun --nnodes=1 --nproc_per_node="$NPROC" \
+  timeout "${TRAIN_TIMEOUT:-0}" torchrun --nnodes=1 --nproc_per_node="$NPROC" \
     --rdzv_backend=c10d --rdzv_endpoint="$MASTER_ADDR:$MASTER_PORT" train.py
 ' 2>&1 | tee "$LOGDIR/train.log"
 TRAIN_RC=${PIPESTATUS[0]}
-
-if [ -n "$POWER_PID" ]; then
-  kill -TERM "$POWER_PID" 2>/dev/null || true
-  wait "$POWER_PID" 2>/dev/null || true
-  python3 "$WORK/power_logger.py" --analyze "$POWER_CSV" \
-    --warmup "${POWER_WARMUP:-300}" --factor "${POWER_FACTOR:-1.35}" \
-    --steps "$MAX_STEPS" | tee "$LOGDIR/power_summary.json"
-fi
 
 echo "TRAIN_EXIT:$TRAIN_RC"
 echo "LOGDIR:$LOGDIR"
